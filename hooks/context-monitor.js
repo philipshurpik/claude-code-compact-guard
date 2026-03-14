@@ -7,7 +7,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const METRICS_FILE = path.join(os.tmpdir(), 'claude-context-metrics.json');
+const BASE_DIR = process.env.COMPACT_GUARD_TMPDIR || os.tmpdir();
+const METRICS_DIR = path.join(BASE_DIR, 'claude-compact-guard');
 
 // Thresholds for status line color coding
 const WARN_PCT = 40;
@@ -43,7 +44,11 @@ process.stdin.on('end', () => {
       session_id: data.session_id ?? '',
     };
 
-    fs.writeFileSync(METRICS_FILE, JSON.stringify(metrics, null, 2));
+    // Write session-scoped metrics file so multiple sessions don't conflict
+    try { fs.mkdirSync(METRICS_DIR, { recursive: true }); } catch { /* exists */ }
+    const sessionId = data.session_id ?? 'unknown';
+    const sessionMetricsFile = path.join(METRICS_DIR, `metrics-${sessionId}.json`);
+    fs.writeFileSync(sessionMetricsFile, JSON.stringify(metrics, null, 2));
 
     // Color-coded status line output
     let color;

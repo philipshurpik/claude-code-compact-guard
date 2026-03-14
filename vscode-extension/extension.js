@@ -3,8 +3,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const TRIGGER_FILE = path.join(os.tmpdir(), 'claude-compact-trigger.json');
-const METRICS_FILE = path.join(os.tmpdir(), 'claude-context-metrics.json');
+const BASE_DIR = process.env.COMPACT_GUARD_TMPDIR || os.tmpdir();
+const TRIGGER_FILE = path.join(BASE_DIR, 'claude-compact-trigger.json');
+const METRICS_DIR = path.join(BASE_DIR, 'claude-compact-guard');
+const HEARTBEAT_FILE = path.join(BASE_DIR, 'claude-compact-guard-active');
 
 let watcher = null;
 let statusBarItem = null;
@@ -166,14 +168,42 @@ function findClaudeTerminal() {
 
 function readMetrics() {
     try {
-        const raw = fs.readFileSync(METRICS_FILE, 'utf8');
-        return JSON.parse(raw);
+        if (!fs.existsSync(METRICS_DIR)) return null;
+        const files = fs.readdirSync(METRICS_DIR)
+            .filter(f => f.startsWith('metrics-') && f.endsWith('.json'));
+        if (files.length === 0) return null;
+
+        // Pick the most recently modified metrics file
+        let latest = null;
+        let latestMtime = 0;
+        for (const file of files) {
+            const full = path.join(METRICS_DIR, file);
+            const mtime = fs.statSync(full).mtimeMs;
+            if (mtime > latestMtime) {
+                latestMtime = mtime;
+                latest = full;
+            }
+        }
+        if (!latest) return null;
+        return JSON.parse(fs.readFileSync(latest, 'utf8'));
     } catch {
         return null;
     }
 }
 
+function writeHeartbeat() {
+    try {
+        fs.writeFileSync(HEARTBEAT_FILE, String(Date.now()));
+    } catch { /* ignore */ }
+}
+
+function removeHeartbeat() {
+    try { fs.unlinkSync(HEARTBEAT_FILE); } catch { /* ignore */ }
+}
+
 function updateStatusBar() {
+    writeHeartbeat();
+
     const metrics = readMetrics();
     if (!metrics || !metrics.used_percentage) {
         statusBarItem.hide();
@@ -192,6 +222,7 @@ function updateStatusBar() {
 
 function deactivate() {
     if (watcher) watcher.close();
+    removeHeartbeat();
 }
 
 module.exports = { activate, deactivate };

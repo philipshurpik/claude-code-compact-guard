@@ -15,30 +15,60 @@ COMPACT_THRESHOLD_PCT = 40
 # Cooldown: don't nag more than once per N seconds
 COOLDOWN_SECONDS = 120
 
-METRICS_FILE = os.path.join(tempfile.gettempdir(), 'claude-context-metrics.json')
-COOLDOWN_FILE = os.path.join(tempfile.gettempdir(), 'claude-compact-cooldown')
-TRIGGER_FILE = os.path.join(tempfile.gettempdir(), 'claude-compact-trigger.json')
+_TMPDIR = os.environ.get('COMPACT_GUARD_TMPDIR', tempfile.gettempdir())
+METRICS_DIR = os.path.join(_TMPDIR, 'claude-compact-guard')
+TRIGGER_FILE = os.path.join(_TMPDIR, 'claude-compact-trigger.json')
+HEARTBEAT_FILE = os.path.join(_TMPDIR, 'claude-compact-guard-active')
+
+HEARTBEAT_MAX_AGE_SECONDS = 30
 
 
-def read_metrics() -> dict | None:
+def read_metrics(session_id: str) -> dict | None:
+    """Read metrics for a specific session."""
+    metrics_file = os.path.join(METRICS_DIR, f'metrics-{session_id}.json')
     try:
-        with open(METRICS_FILE) as f:
+        with open(metrics_file) as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
 
-def is_in_cooldown() -> bool:
+def cooldown_file(session_id: str) -> str:
+    return os.path.join(METRICS_DIR, f'cooldown-{session_id}')
+
+
+def is_in_cooldown(session_id: str) -> bool:
     try:
-        mtime = os.path.getmtime(COOLDOWN_FILE)
+        mtime = os.path.getmtime(cooldown_file(session_id))
         return (time.time() - mtime) < COOLDOWN_SECONDS
     except FileNotFoundError:
         return False
 
 
-def set_cooldown():
-    with open(COOLDOWN_FILE, 'w') as f:
+def set_cooldown(session_id: str):
+    os.makedirs(METRICS_DIR, exist_ok=True)
+    with open(cooldown_file(session_id), 'w') as f:
         f.write('')
+
+
+def is_running_in_editor() -> bool:
+    """Check if this Claude Code session is running inside VS Code / Cursor."""
+    term = os.environ.get('TERM_PROGRAM', '').lower()
+    return term in ('vscode', 'cursor')
+
+
+def is_extension_active() -> bool:
+    """Check if the VS Code / Cursor extension is running via heartbeat file."""
+    try:
+        mtime = os.path.getmtime(HEARTBEAT_FILE)
+        return (time.time() - mtime) < HEARTBEAT_MAX_AGE_SECONDS
+    except FileNotFoundError:
+        return False
+
+
+def should_extension_handle() -> bool:
+    """Only let the extension handle if this session is inside the editor."""
+    return is_running_in_editor() and is_extension_active()
 
 
 def write_vscode_trigger(used_pct: int, tokens_used_k: int, window_k: int, cost: float):
@@ -60,11 +90,12 @@ def write_vscode_trigger(used_pct: int, tokens_used_k: int, window_k: int, cost:
 def main():
     input_data = json.load(sys.stdin)
 
-    # Prevent infinite loops - if we already blocked once, let Claude stop
     if input_data.get('stop_hook_active', False):
         sys.exit(0)
 
-    metrics = read_metrics()
+    session_id = input_data.get('session_id', 'unknown')
+
+    metrics = read_metrics(session_id)
     if not metrics:
         sys.exit(0)
 
@@ -72,10 +103,10 @@ def main():
     if used_pct < COMPACT_THRESHOLD_PCT:
         sys.exit(0)
 
-    if is_in_cooldown():
+    if is_in_cooldown(session_id):
         sys.exit(0)
 
-    set_cooldown()
+    set_cooldown(session_id)
 
     # Calculate useful stats for the message
     window_size = metrics.get('context_window_size', 200000)
@@ -83,9 +114,14 @@ def main():
     window_k = round(window_size / 1000)
     cost = metrics.get('session_cost_usd', 0)
 
-    # Trigger VS Code / Cursor extension dialog
     write_vscode_trigger(used_pct, tokens_used_k, window_k, cost)
 
+    if should_extension_handle():
+        # Session is inside VS Code/Cursor and extension is active.
+        # Extension will show the dialog -- no need to block Claude.
+        sys.exit(0)
+
+    # No extension running - block Claude and ask it to warn the user (CLI fallback)
     reason = (
         f'⚠️ Context usage: {used_pct}% ({tokens_used_k}K/{window_k}K tokens, session cost: ${cost:.3f}). '
         f'Cache will expire in ~5 minutes. '
