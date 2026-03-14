@@ -18,12 +18,12 @@ sends the entire conversation (e.g. 160K tokens) **without cache** - costing sig
 
 Three components that work together:
 
-1. **StatusLine** (`context-monitor.js`) - monitors context usage in real time, writes metrics
+1. **StatusLine** (`hooks/context-monitor.js`) - monitors context usage in real time, writes metrics
    to a temp file, and displays a color-coded context bar in the terminal
-2. **Stop hook** (`compact-check.py`) - fires immediately after Claude finishes responding.
+2. **Stop hook** (`hooks/compact-check.py`) - fires immediately after Claude finishes responding.
    If context exceeds your threshold, it blocks Claude from stopping and tells it to ask you
    to run `/compact` - while the cache is still hot. Works in terminal / CLI.
-3. **VS Code / Cursor extension** (`compact-guard-0.1.0.vsix`) - shows a native warning dialog
+3. **VS Code / Cursor extension** (`vscode-extension/`) - shows a native warning dialog
    with a "Run /compact" button that sends the command directly to the Claude Code terminal.
    No manual typing needed.
 
@@ -69,8 +69,8 @@ Then **restart Claude Code** and **reload your editor** (`Developer: Reload Wind
 
 ```bash
 mkdir -p ~/.claude/hooks
-cp context-monitor.js ~/.claude/hooks/
-cp compact-check.py ~/.claude/hooks/
+cp hooks/context-monitor.js ~/.claude/hooks/
+cp hooks/compact-check.py ~/.claude/hooks/
 chmod +x ~/.claude/hooks/context-monitor.js
 chmod +x ~/.claude/hooks/compact-check.py
 ```
@@ -210,14 +210,15 @@ If not found, it falls back to the active terminal. If no terminal is found at a
 
 ```
 compact-guard/
-├── context-monitor.js           # StatusLine - writes metrics, shows context bar
-├── compact-check.py             # Stop hook - prompts compaction + triggers extension
+├── hooks/
+│   ├── context-monitor.js       # StatusLine - writes metrics, shows context bar
+│   └── compact-check.py         # Stop hook - prompts compaction + triggers extension
+├── vscode-extension/            # VS Code / Cursor extension source
+│   ├── extension.js
+│   └── package.json
 ├── install.sh                   # Installer (hooks + settings + extension)
-├── compact-guard-0.1.0.vsix     # Pre-built VS Code / Cursor extension
-└── vscode-extension/            # Extension source code
-    ├── extension.js
-    ├── package.json
-    └── ...
+└── .github/workflows/
+    └── release.yml              # CI/CD - builds .vsix and creates GitHub release
 ```
 
 Installed locations:

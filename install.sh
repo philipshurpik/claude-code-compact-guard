@@ -16,8 +16,8 @@ mkdir -p "$HOOKS_DIR"
 echo "✓ Created $HOOKS_DIR"
 
 # 2. Copy scripts
-cp "$SCRIPT_DIR/context-monitor.js" "$HOOKS_DIR/context-monitor.js"
-cp "$SCRIPT_DIR/compact-check.py" "$HOOKS_DIR/compact-check.py"
+cp "$SCRIPT_DIR/hooks/context-monitor.js" "$HOOKS_DIR/context-monitor.js"
+cp "$SCRIPT_DIR/hooks/compact-check.py" "$HOOKS_DIR/compact-check.py"
 chmod +x "$HOOKS_DIR/context-monitor.js"
 chmod +x "$HOOKS_DIR/compact-check.py"
 echo "✓ Copied scripts to $HOOKS_DIR"
