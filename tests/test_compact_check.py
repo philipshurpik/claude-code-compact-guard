@@ -1,0 +1,223 @@
+"""Tests for the Stop hook (compact-check.py) decision logic."""
+
+import json
+import os
+import subprocess
+import sys
+import time
+
+import pytest
+
+HOOK = os.path.join(os.path.dirname(__file__), '..', 'hooks', 'compact-check.py')
+
+
+def write_metrics(tmp_path, session_id, used_pct, window_size=200000, cost=0.1):
+    metrics_dir = tmp_path / 'claude-compact-guard'
+    metrics_dir.mkdir(exist_ok=True)
+    metrics = {
+        'timestamp': int(time.time() * 1000),
+        'used_percentage': used_pct,
+        'context_window_size': window_size,
+        'session_cost_usd': cost,
+        'session_id': session_id,
+    }
+    (metrics_dir / f'metrics-{session_id}.json').write_text(json.dumps(metrics))
+
+
+def clear_cooldown(tmp_path, session_id):
+    cooldown = tmp_path / 'claude-compact-guard' / f'cooldown-{session_id}'
+    cooldown.unlink(missing_ok=True)
+
+
+def run_hook(tmp_path, stdin_data, env_extra=None):
+    env = os.environ.copy()
+    env['COMPACT_GUARD_TMPDIR'] = str(tmp_path)
+    env.pop('TERM_PROGRAM', None)
+    if env_extra:
+        env.update(env_extra)
+    result = subprocess.run(
+        [sys.executable, HOOK],
+        input=json.dumps(stdin_data),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    return result
+
+
+def parse_output(result):
+    if not result.stdout.strip():
+        return None
+    return json.loads(result.stdout)
+
+
+# --- Decision logic ---
+
+class TestDecisions:
+    def test_below_threshold_allows(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=20)
+        result = run_hook(tmp_path, {'session_id': 'sess-1'})
+        assert result.returncode == 0
+        assert parse_output(result) is None
+
+    def test_above_threshold_blocks(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=50)
+        result = run_hook(tmp_path, {'session_id': 'sess-1'})
+        output = parse_output(result)
+        assert output['decision'] == 'block'
+        assert '50%' in output['reason']
+
+    def test_exactly_at_threshold_blocks(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=40)
+        result = run_hook(tmp_path, {'session_id': 'sess-1'})
+        output = parse_output(result)
+        assert output['decision'] == 'block'
+
+    def test_stop_hook_active_always_allows(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=90)
+        result = run_hook(tmp_path, {'session_id': 'sess-1', 'stop_hook_active': True})
+        assert parse_output(result) is None
+
+    def test_no_metrics_allows(self, tmp_path):
+        result = run_hook(tmp_path, {'session_id': 'no-such-session'})
+        assert parse_output(result) is None
+
+
+# --- Cooldown ---
+
+class TestCooldown:
+    def test_cooldown_prevents_second_block(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=50)
+
+        r1 = run_hook(tmp_path, {'session_id': 'sess-1'})
+        assert parse_output(r1)['decision'] == 'block'
+
+        r2 = run_hook(tmp_path, {'session_id': 'sess-1'})
+        assert parse_output(r2) is None
+
+    def test_cooldown_is_per_session(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=50)
+        write_metrics(tmp_path, 'sess-2', used_pct=50)
+
+        r1 = run_hook(tmp_path, {'session_id': 'sess-1'})
+        assert parse_output(r1)['decision'] == 'block'
+
+        r2 = run_hook(tmp_path, {'session_id': 'sess-2'})
+        assert parse_output(r2)['decision'] == 'block'
+
+    def test_expired_cooldown_allows_block(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=50)
+        run_hook(tmp_path, {'session_id': 'sess-1'})
+
+        cooldown = tmp_path / 'claude-compact-guard' / 'cooldown-sess-1'
+        old_time = time.time() - 200
+        os.utime(cooldown, (old_time, old_time))
+
+        r2 = run_hook(tmp_path, {'session_id': 'sess-1'})
+        assert parse_output(r2)['decision'] == 'block'
+
+
+# --- Editor detection ---
+
+class TestEditorDetection:
+    def test_extension_in_vscode_skips_block(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=50)
+        (tmp_path / 'claude-compact-guard-active').write_text(str(time.time()))
+
+        result = run_hook(
+            tmp_path,
+            {'session_id': 'sess-1'},
+            env_extra={'TERM_PROGRAM': 'vscode'},
+        )
+        assert parse_output(result) is None
+
+    def test_extension_in_cursor_skips_block(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=50)
+        (tmp_path / 'claude-compact-guard-active').write_text(str(time.time()))
+
+        result = run_hook(
+            tmp_path,
+            {'session_id': 'sess-1'},
+            env_extra={'TERM_PROGRAM': 'cursor'},
+        )
+        assert parse_output(result) is None
+
+    def test_extension_in_external_terminal_still_blocks(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=50)
+        (tmp_path / 'claude-compact-guard-active').write_text(str(time.time()))
+
+        result = run_hook(
+            tmp_path,
+            {'session_id': 'sess-1'},
+            env_extra={'TERM_PROGRAM': 'iTerm2'},
+        )
+        assert parse_output(result)['decision'] == 'block'
+
+    def test_no_heartbeat_in_editor_blocks(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=50)
+
+        result = run_hook(
+            tmp_path,
+            {'session_id': 'sess-1'},
+            env_extra={'TERM_PROGRAM': 'vscode'},
+        )
+        assert parse_output(result)['decision'] == 'block'
+
+    def test_stale_heartbeat_blocks(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=50)
+        heartbeat = tmp_path / 'claude-compact-guard-active'
+        heartbeat.write_text('old')
+        old_time = time.time() - 60
+        os.utime(heartbeat, (old_time, old_time))
+
+        result = run_hook(
+            tmp_path,
+            {'session_id': 'sess-1'},
+            env_extra={'TERM_PROGRAM': 'vscode'},
+        )
+        assert parse_output(result)['decision'] == 'block'
+
+
+# --- Trigger file ---
+
+class TestTrigger:
+    def test_writes_trigger_on_block(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=50, cost=0.25)
+        run_hook(tmp_path, {'session_id': 'sess-1'})
+
+        trigger = json.loads((tmp_path / 'claude-compact-trigger.json').read_text())
+        assert trigger['used_percentage'] == 50
+        assert trigger['session_cost_usd'] == 0.25
+
+    def test_writes_trigger_even_when_extension_handles(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', used_pct=50)
+        (tmp_path / 'claude-compact-guard-active').write_text(str(time.time()))
+
+        run_hook(
+            tmp_path,
+            {'session_id': 'sess-1'},
+            env_extra={'TERM_PROGRAM': 'vscode'},
+        )
+
+        trigger = json.loads((tmp_path / 'claude-compact-trigger.json').read_text())
+        assert trigger['used_percentage'] == 50
+
+
+# --- Session isolation ---
+
+class TestSessionIsolation:
+    def test_reads_own_session_metrics(self, tmp_path):
+        write_metrics(tmp_path, 'sess-low', used_pct=10)
+        write_metrics(tmp_path, 'sess-high', used_pct=60)
+
+        r_low = run_hook(tmp_path, {'session_id': 'sess-low'})
+        assert parse_output(r_low) is None
+
+        r_high = run_hook(tmp_path, {'session_id': 'sess-high'})
+        assert parse_output(r_high)['decision'] == 'block'
+
+    def test_missing_session_metrics_allows(self, tmp_path):
+        write_metrics(tmp_path, 'other-session', used_pct=90)
+
+        result = run_hook(tmp_path, {'session_id': 'my-session'})
+        assert parse_output(result) is None

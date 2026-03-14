@@ -18,6 +18,9 @@ Thanks for your interest in contributing!
 ├── vscode-extension/        # VS Code / Cursor extension source
 │   ├── extension.js
 │   └── package.json
+├── tests/
+│   ├── test_compact_check.py      # Stop hook tests (pytest)
+│   └── test_context_monitor.js    # StatusLine tests (node:test)
 ├── install.sh               # Installer script
 └── .github/workflows/
     └── release.yml           # CI/CD
@@ -25,16 +28,14 @@ Thanks for your interest in contributing!
 
 ## Testing
 
-**Hooks** - simulate with mock data:
+**Automated tests** (run both from repo root):
 
 ```bash
-# Test StatusLine
-echo '{"context_window":{"used_percentage":55,"remaining_percentage":45,"context_window_size":200000},"cost":{"total_cost_usd":0.1},"model":{"id":"claude-sonnet-4-6","display_name":"Sonnet"}}' | node hooks/context-monitor.js
+# Stop hook tests (Python) - requires pytest
+python3 -m pytest tests/test_compact_check.py -v
 
-# Test Stop hook (above threshold)
-echo '{"used_percentage":45,"context_window_size":200000,"session_cost_usd":0.1}' > /tmp/claude-context-metrics.json
-rm -f /tmp/claude-compact-cooldown
-echo '{"stop_hook_active":false}' | python3 hooks/compact-check.py
+# StatusLine hook tests (Node.js) - no dependencies
+node --test tests/test_context_monitor.js
 ```
 
 **Extension** - build and install locally:

@@ -29,24 +29,26 @@ Three components that work together:
 
 ## How It Works
 
-**Terminal (CLI):**
+**VS Code / Cursor** (extension installed):
 ```
-Claude responds -> Stop hook fires -> reads context metrics
-                                   -> if > 40%: blocks Claude, shows warning
-                                   -> Claude tells you: "run /compact now"
-                                   -> you type /compact (cache is still warm!)
-```
-
-**VS Code / Cursor:**
-```
-Claude responds -> Stop hook fires -> writes trigger file
+Claude responds -> Stop hook fires -> detects extension is active
+                                   -> writes trigger file, does NOT block Claude
                                    -> extension sees trigger
                                    -> shows warning dialog with "Run /compact" button
                                    -> you click the button
                                    -> extension sends /compact to terminal automatically
 ```
 
-Both paths fire simultaneously - you get the CLI warning AND the editor dialog.
+**Terminal (CLI)** (no extension):
+```
+Claude responds -> Stop hook fires -> no extension heartbeat detected
+                                   -> blocks Claude, shows warning
+                                   -> Claude tells you: "run /compact now"
+                                   -> you type /compact (cache is still warm!)
+```
+
+The stop hook auto-detects whether the extension is running. With the extension,
+Claude isn't blocked -- you just get a clean dialog. Without it, you get the CLI fallback.
 
 ## Quick Install
 
@@ -161,14 +163,13 @@ const DANGER_PCT = 60;  // red
 1. You chat with Claude, context grows
 2. Claude finishes a response at 42% context
 3. Stop hook fires, reads metrics, sees 42% > 40%
-4. Two things happen simultaneously:
-   - **CLI**: hook returns `{"decision": "block"}`, Claude warns you in chat
-   - **Editor**: hook writes trigger file, extension shows warning dialog
-5. In VS Code / Cursor, you click "Run /compact"
-6. Extension sends `/compact` to the Claude Code terminal
-7. Compaction runs using cached tokens (cheap!)
-8. Context drops to ~5-10%
-9. You continue working
+4. **With extension**: hook writes trigger file and exits cleanly (no block).
+   Extension shows warning dialog with "Run /compact" button.
+   **Without extension**: hook blocks Claude, which warns you in chat.
+5. You click "Run /compact" in the dialog (or type `/compact` in CLI)
+6. Compaction runs using cached tokens (cheap!)
+7. Context drops to ~5-10%
+8. You continue working
 
 If you ignore the warning:
 - Cooldown prevents nagging for 2 minutes
@@ -228,10 +229,11 @@ Installed locations:
 └── compact-check.py
 ```
 
-Temp files (auto-managed):
-- `/tmp/claude-context-metrics.json` - context metrics (written by StatusLine)
-- `/tmp/claude-compact-trigger.json` - extension trigger (written by Stop hook)
-- `/tmp/claude-compact-cooldown` - cooldown marker
+Temp files (auto-managed, in `/tmp/`):
+- `claude-compact-guard/metrics-{session_id}.json` - per-session context metrics (written by StatusLine)
+- `claude-compact-guard/cooldown-{session_id}` - per-session cooldown marker
+- `claude-compact-trigger.json` - extension trigger (written by Stop hook)
+- `claude-compact-guard-active` - extension heartbeat (tells Stop hook to skip blocking)
 
 ## Uninstall
 
@@ -246,7 +248,7 @@ cursor --uninstall-extension compact-guard.compact-guard
 windsurf --uninstall-extension compact-guard.compact-guard
 
 # Clean up temp files
-rm -f /tmp/claude-context-metrics.json /tmp/claude-compact-trigger.json /tmp/claude-compact-cooldown
+rm -rf /tmp/claude-compact-guard /tmp/claude-compact-trigger.json /tmp/claude-compact-guard-active
 ```
 
 Then remove the `statusLine` and `Stop` hook entries from `~/.claude/settings.json`.
