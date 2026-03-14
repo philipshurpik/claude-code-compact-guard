@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build VSIX
+        working-directory: vscode-extension
+        run: |
+          npm install --save-dev @vscode/vsce
+          npx @vscode/vsce package --allow-missing-repository
+          mv *.vsix ../
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ steps.version.outputs.version }}"
+          body: |
+            ## Install
+
+            ```bash
+            # Download and run
+            gh repo clone ${{ github.repository }} compact-guard
+            cd compact-guard
+            bash install.sh
+            ```
+
+            Or install manually - see [README](https://github.com/${{ github.repository }}#manual-install).
+          files: |
+            compact-guard-*.vsix
+            context-monitor.js
+            compact-check.py
+            install.sh
+          draft: false
+          prerelease: false

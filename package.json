@@ -1,0 +1,33 @@
+{
+  "name": "claude-code-compact-guard",
+  "displayName": "Claude Code Compact Guard",
+  "description": "Proactive compaction prompts for Claude Code - saves tokens by compacting while cache is warm",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "Philip Shurpik",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "compactGuard.compactNow",
+        "title": "Compact Guard: Run /compact in Claude Code"
+      },
+      {
+        "command": "compactGuard.showStatus",
+        "title": "Compact Guard: Show Context Status"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.7.1"
+  }
+}
