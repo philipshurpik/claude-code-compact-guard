@@ -71,7 +71,7 @@ process.stdin.on('end', () => {
     let branch = '';
     if (cwd) {
       try {
-        branch = execSync('git branch --show-current --no-optional-locks', { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+        branch = execSync('git --no-optional-locks branch --show-current', { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
       } catch { /* not a git repo */ }
     }
 
@@ -95,10 +95,14 @@ process.stdin.on('end', () => {
       }
     }
 
+    const now = new Date();
+    const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
     // Build output
     let output = `🤖 ${modelName}`;
     if (project) output += ` | 📁 ${project}`;
     if (branch) output += ` | 🔀 ${branch}`;
+    output += ` | 🕐${time}`;
     output += ` | ${bar} ${usedPct}% (${tokensK}K/${windowK}K)`;
 
     process.stdout.write(output);
