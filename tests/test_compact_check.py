@@ -6,8 +6,6 @@ import subprocess
 import sys
 import time
 
-import pytest
-
 HOOK = os.path.join(os.path.dirname(__file__), '..', 'hooks', 'compact-check.py')
 
 
@@ -53,6 +51,7 @@ def parse_output(result):
 
 # --- Decision logic ---
 
+
 class TestDecisions:
     def test_below_threshold_allows(self, tmp_path):
         write_metrics(tmp_path, 'sess-1', used_pct=20)
@@ -84,6 +83,7 @@ class TestDecisions:
 
 
 # --- Cooldown ---
+
 
 class TestCooldown:
     def test_cooldown_prevents_second_block(self, tmp_path):
@@ -118,6 +118,7 @@ class TestCooldown:
 
 
 # --- Editor detection ---
+
 
 class TestEditorDetection:
     def test_extension_in_vscode_skips_block(self, tmp_path):
@@ -180,6 +181,7 @@ class TestEditorDetection:
 
 # --- Trigger file ---
 
+
 class TestTrigger:
     def test_writes_trigger_on_block(self, tmp_path):
         write_metrics(tmp_path, 'sess-1', used_pct=50, cost=0.25)
@@ -204,6 +206,7 @@ class TestTrigger:
 
 
 # --- Session isolation ---
+
 
 class TestSessionIsolation:
     def test_reads_own_session_metrics(self, tmp_path):
