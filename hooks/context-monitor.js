@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { execSync } = require('child_process');
 
 const BASE_DIR = process.env.COMPACT_GUARD_TMPDIR || os.tmpdir();
 const METRICS_DIR = path.join(BASE_DIR, 'claude-compact-guard');
@@ -53,25 +54,54 @@ process.stdin.on('end', () => {
     // Color-coded status line output
     let color;
     if (usedPct >= DANGER_PCT) {
-      color = '\x1b[31m'; // red
+      color = '\x1b[38;5;208m'; // orange
     } else if (usedPct >= WARN_PCT) {
       color = '\x1b[33m'; // yellow
     } else {
       color = '\x1b[32m'; // green
     }
     const reset = '\x1b[0m';
+    const dimColor = '\x1b[38;5;238m';
 
     const modelName = model.display_name ?? 'Claude';
-    const costStr = (cost.total_cost_usd ?? 0).toFixed(3);
+    const cwd = data.cwd || '';
+
+    // Get project name and git branch
+    const project = cwd ? path.basename(cwd) : '';
+    let branch = '';
+    if (cwd) {
+      try {
+        branch = execSync('git branch --show-current', { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+      } catch { /* not a git repo */ }
+    }
 
     // Estimate tokens used (used_percentage * window_size / 100)
     const tokensUsed = Math.round((usedPct / 100) * windowSize);
     const tokensK = (tokensUsed / 1000).toFixed(0);
     const windowK = (windowSize / 1000).toFixed(0);
 
-    process.stdout.write(
-      `${modelName} | ${color}Ctx: ${usedPct}% (${tokensK}K/${windowK}K)${reset} | $${costStr}`
-    );
+    // Build graphical progress bar (10 segments)
+    const barWidth = 10;
+    let bar = '';
+    for (let i = 0; i < barWidth; i++) {
+      const segStart = i * 10;
+      const progress = usedPct - segStart;
+      if (progress >= 8) {
+        bar += `${color}█${reset}`;
+      } else if (progress >= 3) {
+        bar += `${color}▄${reset}`;
+      } else {
+        bar += `${dimColor}░${reset}`;
+      }
+    }
+
+    // Build output
+    let output = `🤖 ${modelName}`;
+    if (project) output += ` | 📁 ${project}`;
+    if (branch) output += ` | 🔀 ${branch}`;
+    output += ` | ${bar} ${usedPct}% (${tokensK}K/${windowK}K)`;
+
+    process.stdout.write(output);
   } catch {
     process.stdout.write('Ctx: --');
   }

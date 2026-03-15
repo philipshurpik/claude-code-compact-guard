@@ -103,14 +103,30 @@ describe('status line output', () => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it('outputs green below 40%', () => {
+    it('outputs green bar below 40%', () => {
         const output = runHook(makeInput(), tmpDir);
         assert.ok(output.includes('\x1b[32m'), 'expected green ANSI code');
         assert.ok(output.includes('25%'));
-        assert.ok(output.includes('Sonnet'));
+        assert.ok(output.includes('🤖 Sonnet'));
+        assert.ok(output.includes('█'), 'expected filled bar segments');
+        assert.ok(output.includes('░'), 'expected empty bar segments');
     });
 
-    it('outputs yellow at 40-59%', () => {
+    it('includes project and branch when cwd is a git repo', () => {
+        const input = makeInput({ cwd: process.cwd() });
+        const output = runHook(input, tmpDir);
+        const dirName = path.basename(process.cwd());
+        assert.ok(output.includes(`📁 ${dirName}`), 'expected project name');
+        assert.ok(output.includes('🔀'), 'expected branch emoji');
+    });
+
+    it('omits project and branch when cwd is absent', () => {
+        const output = runHook(makeInput(), tmpDir);
+        assert.ok(!output.includes('📁'), 'no project without cwd');
+        assert.ok(!output.includes('🔀'), 'no branch without cwd');
+    });
+
+    it('outputs yellow bar at 40-59%', () => {
         const input = makeInput({
             context_window: { ...makeInput().context_window, used_percentage: 45 },
         });
@@ -119,18 +135,18 @@ describe('status line output', () => {
         assert.ok(output.includes('45%'));
     });
 
-    it('outputs red at 60%+', () => {
+    it('outputs orange bar at 60%+', () => {
         const input = makeInput({
             context_window: { ...makeInput().context_window, used_percentage: 75 },
         });
         const output = runHook(input, tmpDir);
-        assert.ok(output.includes('\x1b[31m'), 'expected red ANSI code');
+        assert.ok(output.includes('\x1b[38;5;208m'), 'expected orange ANSI code');
         assert.ok(output.includes('75%'));
     });
 
-    it('includes cost in output', () => {
+    it('does not include cost in output', () => {
         const output = runHook(makeInput(), tmpDir);
-        assert.ok(output.includes('$0.123'));
+        assert.ok(!output.includes('$'), 'cost should not be in output');
     });
 
     it('includes token counts', () => {
