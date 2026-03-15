@@ -95,11 +95,23 @@ process.stdin.on('end', () => {
       }
     }
 
+    // Cache hit ratio
+    const cacheRead = currentUsage.cache_read_input_tokens ?? 0;
+    const cacheCreation = currentUsage.cache_creation_input_tokens ?? 0;
+    const totalCacheTokens = cacheRead + cacheCreation;
+    let cacheInfo = '';
+    if (totalCacheTokens > 0) {
+      const cacheHitPct = Math.round((cacheRead / totalCacheTokens) * 100);
+      const cacheColor = cacheHitPct >= 80 ? '\x1b[32m' : cacheHitPct >= 50 ? '\x1b[33m' : '\x1b[38;5;208m';
+      cacheInfo = ` | ${cacheColor}⚡${cacheHitPct}%${reset}`;
+    }
+
     // Build output
     let output = `🤖 ${modelName}`;
     if (project) output += ` | 📁 ${project}`;
     if (branch) output += ` | 🔀 ${branch}`;
     output += ` | ${bar} ${usedPct}% (${tokensK}K/${windowK}K)`;
+    output += cacheInfo;
 
     process.stdout.write(output);
   } catch {
