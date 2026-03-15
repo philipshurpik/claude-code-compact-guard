@@ -16,9 +16,9 @@ COMPACT_THRESHOLD_PCT = 40
 COOLDOWN_SECONDS = 120
 
 _TMPDIR = os.environ.get('COMPACT_GUARD_TMPDIR', tempfile.gettempdir())
-METRICS_DIR = os.path.join(_TMPDIR, 'claude-compact-guard')
-TRIGGER_FILE = os.path.join(_TMPDIR, 'claude-compact-trigger.json')
-HEARTBEAT_FILE = os.path.join(_TMPDIR, 'claude-compact-guard-active')
+METRICS_DIR = os.path.join(_TMPDIR, 'claude-code-compact-guard')
+TRIGGER_FILE = os.path.join(_TMPDIR, 'claude-code-compact-guard-trigger.json')
+HEARTBEAT_FILE = os.path.join(_TMPDIR, 'claude-code-compact-guard-active')
 
 HEARTBEAT_MAX_AGE_SECONDS = 30
 

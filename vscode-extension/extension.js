@@ -4,9 +4,9 @@ const path = require('path');
 const os = require('os');
 
 const BASE_DIR = process.env.COMPACT_GUARD_TMPDIR || os.tmpdir();
-const TRIGGER_FILE = path.join(BASE_DIR, 'claude-compact-trigger.json');
-const METRICS_DIR = path.join(BASE_DIR, 'claude-compact-guard');
-const HEARTBEAT_FILE = path.join(BASE_DIR, 'claude-compact-guard-active');
+const TRIGGER_FILE = path.join(BASE_DIR, 'claude-code-compact-guard-trigger.json');
+const METRICS_DIR = path.join(BASE_DIR, 'claude-code-compact-guard');
+const HEARTBEAT_FILE = path.join(BASE_DIR, 'claude-code-compact-guard-active');
 
 let watcher = null;
 let statusBarItem = null;

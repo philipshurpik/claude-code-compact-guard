@@ -53,7 +53,7 @@ describe('metrics file writing', () => {
     it('writes session-scoped metrics file', () => {
         runHook(makeInput({ session_id: 'abc-123' }), tmpDir);
 
-        const file = path.join(tmpDir, 'claude-compact-guard', 'metrics-abc-123.json');
+        const file = path.join(tmpDir, 'claude-code-compact-guard', 'metrics-abc-123.json');
         assert.ok(fs.existsSync(file));
 
         const metrics = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -73,7 +73,7 @@ describe('metrics file writing', () => {
         runHook(inputA, tmpDir);
         runHook(inputB, tmpDir);
 
-        const dir = path.join(tmpDir, 'claude-compact-guard');
+        const dir = path.join(tmpDir, 'claude-code-compact-guard');
         const metricsA = JSON.parse(fs.readFileSync(path.join(dir, 'metrics-sess-A.json'), 'utf8'));
         const metricsB = JSON.parse(fs.readFileSync(path.join(dir, 'metrics-sess-B.json'), 'utf8'));
 
@@ -86,7 +86,7 @@ describe('metrics file writing', () => {
         delete input.session_id;
         runHook(input, tmpDir);
 
-        const file = path.join(tmpDir, 'claude-compact-guard', 'metrics-unknown.json');
+        const file = path.join(tmpDir, 'claude-code-compact-guard', 'metrics-unknown.json');
         assert.ok(fs.existsSync(file));
     });
 });

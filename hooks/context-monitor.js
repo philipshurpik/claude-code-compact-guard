@@ -9,7 +9,7 @@ const os = require('os');
 const { execSync } = require('child_process');
 
 const BASE_DIR = process.env.COMPACT_GUARD_TMPDIR || os.tmpdir();
-const METRICS_DIR = path.join(BASE_DIR, 'claude-compact-guard');
+const METRICS_DIR = path.join(BASE_DIR, 'claude-code-compact-guard');
 
 // Thresholds for status line color coding
 const WARN_PCT = 40;
