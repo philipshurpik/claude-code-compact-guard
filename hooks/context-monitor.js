@@ -99,11 +99,11 @@ process.stdin.on('end', () => {
     const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
     // Build output
-    let output = `🤖 ${modelName}`;
-    if (project) output += ` | 📁 ${project}`;
-    if (branch) output += ` | 🔀 ${branch}`;
-    output += ` | 🕐${time}`;
-    output += ` | ${bar} ${usedPct}% (${tokensK}K/${windowK}K)`;
+    let output = `◆ ${modelName}`;
+    if (project) output += ` │ ▪ ${project}`;
+    if (branch) output += ` │ ⎇ ${branch}`;
+    output += ` │ ◷ ${time}`;
+    output += ` │ ${bar} ${usedPct}% (${tokensK}K/${windowK}K)`;
 
     process.stdout.write(output);
   } catch {
