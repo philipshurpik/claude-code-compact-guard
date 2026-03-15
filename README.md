@@ -12,7 +12,8 @@ Save money by compacting context while the API cache is still warm.
 
 Claude Code's auto-compact only triggers when a **new message** is sent and context exceeds ~83%.
 If you wait 5+ minutes between messages, the prompt cache expires. That means your next message
-sends the entire conversation (e.g. 160K tokens) **without cache** - costing significantly more.
+sends the entire conversation (e.g. 160K tokens) **without cache** - costing significantly more 
+(or eating 10 times faster your Pro/Max plan quota).
 
 ## The Solution
 

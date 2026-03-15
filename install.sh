@@ -93,9 +93,9 @@ if [ ! -f "$VSIX_FILE" ] && [ -d "$EXT_DIR" ]; then
     echo ""
     if command -v npx &>/dev/null; then
         echo "Building extension from source..."
-        (cd "$EXT_DIR" && npx @vscode/vsce package --allow-missing-repository 2>/dev/null && mv *.vsix "$SCRIPT_DIR/") && \
+        (cd "$EXT_DIR" && npm install --save-dev @vscode/vsce 2>/dev/null && npx @vscode/vsce package --allow-missing-repository && mv *.vsix "$SCRIPT_DIR/") && \
             echo "✓ Built $VSIX_FILE" || \
-            echo "✗ Failed to build extension (npx @vscode/vsce package failed)"
+            echo "✗ Failed to build extension (run 'cd vscode-extension && npx @vscode/vsce package' to see errors)"
     else
         echo "⚠️  npx not found - cannot build extension. Install Node.js or download .vsix from GitHub releases."
     fi
