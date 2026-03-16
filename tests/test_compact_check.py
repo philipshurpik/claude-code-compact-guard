@@ -26,9 +26,21 @@ def clear_cooldown(tmp_path, session_id):
     cooldown.unlink(missing_ok=True)
 
 
+def _setup_fake_security(tmp_path):
+    """Create a stub `security` binary that always fails, preventing real Keychain access."""
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir(exist_ok=True)
+    fake = bin_dir / 'security'
+    fake.write_text('#!/bin/sh\nexit 1\n')
+    fake.chmod(0o755)
+    return str(bin_dir)
+
+
 def run_hook(tmp_path, stdin_data, env_extra=None):
+    fake_bin = _setup_fake_security(tmp_path)
     env = os.environ.copy()
     env['COMPACT_GUARD_TMPDIR'] = str(tmp_path)
+    env['PATH'] = fake_bin + os.pathsep + env.get('PATH', '')
     env.pop('TERM_PROGRAM', None)
     if env_extra:
         env.update(env_extra)

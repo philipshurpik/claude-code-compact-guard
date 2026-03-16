@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -181,8 +182,6 @@ def _save_credentials(creds: dict):
 def _get_claude_code_version() -> str:
     try:
         out = subprocess.check_output(['claude', '--version'], stderr=subprocess.DEVNULL, text=True).strip()
-        import re
-
         m = re.search(r'[\d.]+', out)
         return m.group(0) if m else 'unknown'
     except Exception:
@@ -223,7 +222,10 @@ def _refresh_oauth_token() -> str | None:
     req = urllib.request.Request(
         'https://console.anthropic.com/v1/oauth/token',
         data=post_data,
-        headers={'Content-Type': 'application/json'},
+        headers={
+            'Content-Type': 'application/json',
+            'User-Agent': f'claude-code/{_get_claude_code_version()}',
+        },
         method='POST',
     )
     try:
