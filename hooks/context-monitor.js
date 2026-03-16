@@ -12,7 +12,7 @@ const { execSync, execFileSync } = require('child_process');
 const BASE_DIR = process.env.COMPACT_GUARD_TMPDIR || os.tmpdir();
 const METRICS_DIR = path.join(BASE_DIR, 'claude-code-compact-guard');
 const USAGE_CACHE_FILE = path.join(METRICS_DIR, 'usage-cache.json');
-const USAGE_CACHE_TTL_MS = 120000; // Cache usage data for 120 sec to avoid 429s
+const USAGE_CACHE_TTL_MS = 300000; // Cache usage data for 300 sec to avoid 429s
 
 // Autocompact buffer ratio (Claude Code reserves ~16.5% for autocompact)
 const AUTOCOMPACT_BUFFER_RATIO = 0.165;

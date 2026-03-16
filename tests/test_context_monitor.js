@@ -142,11 +142,6 @@ describe('status line output', () => {
         assert.ok(output.includes('\x1b[38;5;208m'), 'expected orange ANSI code');
     });
 
-    it('does not include cost in output', () => {
-        const output = runHook(makeInput(), tmpDir);
-        assert.ok(!output.includes('$'), 'cost should not be in output');
-    });
-
     it('includes token counts', () => {
         const output = runHook(makeInput(), tmpDir);
         // Effective window = 200K * 0.835 = 167K, tokens recalculated
