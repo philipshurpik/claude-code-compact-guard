@@ -113,11 +113,17 @@ describe('status line output', () => {
     });
 
     it('includes project and branch when cwd is a git repo', () => {
+        const { execSync } = require('node:child_process');
         const input = makeInput({ cwd: process.cwd() });
         const output = runHook(input, tmpDir);
         const dirName = path.basename(process.cwd());
         assert.ok(output.includes(dirName), 'expected project name');
-        assert.ok(output.includes('⎇'), 'expected branch symbol');
+        // Branch symbol only appears when not on detached HEAD (CI uses detached checkout)
+        let branch = '';
+        try { branch = execSync('git branch --show-current', { encoding: 'utf8' }).trim(); } catch { /* ignore */ }
+        if (branch) {
+            assert.ok(output.includes('⎇'), 'expected branch symbol');
+        }
     });
 
     it('omits project and branch when cwd is absent', () => {
