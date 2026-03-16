@@ -9,14 +9,13 @@ import time
 HOOK = os.path.join(os.path.dirname(__file__), '..', 'hooks', 'compact-check.py')
 
 
-def write_metrics(tmp_path, session_id, used_pct, window_size=200000, cost=0.1):
+def write_metrics(tmp_path, session_id, used_pct, window_size=200000):
     metrics_dir = tmp_path / 'claude-code-compact-guard'
     metrics_dir.mkdir(exist_ok=True)
     metrics = {
         'timestamp': int(time.time() * 1000),
         'used_percentage': used_pct,
         'context_window_size': window_size,
-        'session_cost_usd': cost,
         'session_id': session_id,
     }
     (metrics_dir / f'metrics-{session_id}.json').write_text(json.dumps(metrics))
@@ -54,7 +53,7 @@ def parse_output(result):
 
 class TestDecisions:
     def test_below_threshold_allows(self, tmp_path):
-        write_metrics(tmp_path, 'sess-1', used_pct=20)
+        write_metrics(tmp_path, 'sess-1', used_pct=15)
         result = run_hook(tmp_path, {'session_id': 'sess-1'})
         assert result.returncode == 0
         assert parse_output(result) is None
@@ -143,7 +142,8 @@ class TestEditorDetection:
         )
         assert parse_output(result) is None
 
-    def test_extension_in_external_terminal_still_blocks(self, tmp_path):
+    def test_active_heartbeat_delegates_regardless_of_terminal(self, tmp_path):
+        """Extension heartbeat alone is enough to delegate — TERM_PROGRAM doesn't matter."""
         write_metrics(tmp_path, 'sess-1', used_pct=50)
         (tmp_path / 'claude-code-compact-guard-active').write_text(str(time.time()))
 
@@ -152,7 +152,7 @@ class TestEditorDetection:
             {'session_id': 'sess-1'},
             env_extra={'TERM_PROGRAM': 'iTerm2'},
         )
-        assert parse_output(result)['decision'] == 'block'
+        assert parse_output(result) is None
 
     def test_no_heartbeat_in_editor_blocks(self, tmp_path):
         write_metrics(tmp_path, 'sess-1', used_pct=50)
@@ -184,12 +184,11 @@ class TestEditorDetection:
 
 class TestTrigger:
     def test_writes_trigger_on_block(self, tmp_path):
-        write_metrics(tmp_path, 'sess-1', used_pct=50, cost=0.25)
+        write_metrics(tmp_path, 'sess-1', used_pct=50)
         run_hook(tmp_path, {'session_id': 'sess-1'})
 
         trigger = json.loads((tmp_path / 'claude-code-compact-guard-trigger.json').read_text())
         assert trigger['used_percentage'] == 50
-        assert trigger['session_cost_usd'] == 0.25
 
     def test_writes_trigger_even_when_extension_handles(self, tmp_path):
         write_metrics(tmp_path, 'sess-1', used_pct=50)

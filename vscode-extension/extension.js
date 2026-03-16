@@ -8,9 +8,12 @@ const TRIGGER_FILE = path.join(BASE_DIR, 'claude-code-compact-guard-trigger.json
 const METRICS_DIR = path.join(BASE_DIR, 'claude-code-compact-guard');
 const HEARTBEAT_FILE = path.join(BASE_DIR, 'claude-code-compact-guard-active');
 
+const COOLDOWN_MS = 200000; // Don't show compaction dialog more than once per 200s
+
 let watcher = null;
 let statusBarItem = null;
 let debounceTimer = null;
+let lastTriggerTime = 0;
 
 function activate(context) {
     // Status bar item showing context %
@@ -45,8 +48,10 @@ function activate(context) {
             }
             const windowK = Math.round(metrics.context_window_size / 1000);
             const usedK = Math.round((metrics.used_percentage / 100) * metrics.context_window_size / 1000);
+            const ago = metrics.timestamp ? formatTimeAgo(metrics.timestamp) : '?';
+            const sessionUsage = metrics.session_usage_pct != null ? ` | Session: ${metrics.session_usage_pct}%` : '';
             vscode.window.showInformationMessage(
-                `Claude Code: ${metrics.used_percentage}% context used (${usedK}K/${windowK}K) | $${(metrics.session_cost_usd || 0).toFixed(3)} session cost`
+                `Claude Code: ${metrics.used_percentage}% (${usedK}K/${windowK}K) | ${ago}${sessionUsage}`
             );
         })
     );
@@ -103,17 +108,16 @@ function handleTrigger() {
     // Clear trigger so we don't re-fire
     try { fs.writeFileSync(TRIGGER_FILE, '{}'); } catch { /* ignore */ }
 
+    // Cooldown: don't nag more than once per COOLDOWN_MS
+    const now = Date.now();
+    if (now - lastTriggerTime < COOLDOWN_MS) return;
+    lastTriggerTime = now;
+
     const pct = trigger.used_percentage || '?';
     const tokensK = trigger.tokens_used_k || '?';
     const windowK = trigger.window_k || '?';
-    const cost = trigger.session_cost_usd != null ? `$${trigger.session_cost_usd.toFixed(3)}` : '';
 
-    const message = [
-        `⚠️ Claude Code context at ${pct}% (${tokensK}K/${windowK}K tokens).`,
-        'Cache expires in ~5 min.',
-        cost ? `Session cost: ${cost}.` : '',
-        'Compact now to save on API costs?',
-    ].filter(Boolean).join(' ');
+    const message = `⚠️ Claude Code context at ${pct}% (${tokensK}K/${windowK}K tokens). Cache expires in ~5 min. Compact now?`;
 
     vscode.window.showWarningMessage(
         message,
@@ -128,42 +132,44 @@ function handleTrigger() {
 }
 
 function sendCompactToTerminal() {
-    // Find a Claude Code terminal
+    // Find a Claude Code terminal (strict match only — don't grab random shells)
     const claudeTerminal = findClaudeTerminal();
 
     if (claudeTerminal) {
         claudeTerminal.show();
         claudeTerminal.sendText('/compact', true);
         vscode.window.showInformationMessage('Compact Guard: sent /compact to Claude Code.');
-    } else {
-        // No Claude terminal found - copy to clipboard as fallback
-        vscode.env.clipboard.writeText('/compact');
-        vscode.window.showWarningMessage(
-            'Compact Guard: no Claude Code terminal found. "/compact" copied to clipboard - paste it manually.'
-        );
+        return;
     }
+
+    // No terminal — focus Claude Code extension input and copy to clipboard
+    vscode.env.clipboard.writeText('/compact');
+    vscode.commands.executeCommand('claude-vscode.focus').then(
+        () => vscode.window.showInformationMessage(
+            'Compact Guard: Claude Code focused, /compact copied — paste (Cmd+V) and press Enter.'
+        ),
+        () => vscode.window.showWarningMessage(
+            'Compact Guard: "/compact" copied to clipboard — paste it into Claude Code chat.'
+        )
+    );
 }
 
 function findClaudeTerminal() {
-    const terminals = vscode.window.terminals;
-
-    // Try exact matches first, then fuzzy
-    const patterns = [
-        (t) => t.name.toLowerCase().includes('claude'),
-        (t) => t.name.toLowerCase().includes('cc'),
-        // Last resort: use the active terminal if there's only one
-        () => terminals.length === 1 ? terminals[0] : null,
-    ];
-
-    for (const match of patterns) {
-        for (const terminal of terminals) {
-            const result = match(terminal);
-            if (result) return result;
-        }
+    // Only match terminals that are actually Claude Code, not random shells
+    for (const terminal of vscode.window.terminals) {
+        const name = terminal.name.toLowerCase();
+        if (name.includes('claude')) return terminal;
     }
+    return null;
+}
 
-    // Final fallback: active terminal
-    return vscode.window.activeTerminal || null;
+function formatTimeAgo(timestampMs) {
+    const seconds = Math.round((Date.now() - timestampMs) / 1000);
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.round(minutes / 60);
+    return `${hours}h ago`;
 }
 
 function readMetrics() {
@@ -173,19 +179,30 @@ function readMetrics() {
             .filter(f => f.startsWith('metrics-') && f.endsWith('.json'));
         if (files.length === 0) return null;
 
-        // Pick the most recently modified metrics file
+        const now = Date.now();
         let latest = null;
         let latestMtime = 0;
         for (const file of files) {
             const full = path.join(METRICS_DIR, file);
             const mtime = fs.statSync(full).mtimeMs;
+            // Clean up metrics files older than 1 hour
+            if (now - mtime > 3600000) {
+                try { fs.unlinkSync(full); } catch { /* ignore */ }
+                continue;
+            }
             if (mtime > latestMtime) {
                 latestMtime = mtime;
                 latest = full;
             }
         }
         if (!latest) return null;
-        return JSON.parse(fs.readFileSync(latest, 'utf8'));
+
+        const metrics = JSON.parse(fs.readFileSync(latest, 'utf8'));
+
+        // Ignore stale metrics (older than 5 minutes — no active session)
+        if (metrics.timestamp && (now - metrics.timestamp) > 300000) return null;
+
+        return metrics;
     } catch {
         return null;
     }
@@ -205,7 +222,7 @@ function updateStatusBar() {
     writeHeartbeat();
 
     const metrics = readMetrics();
-    if (!metrics || !metrics.used_percentage) {
+    if (!metrics || metrics.used_percentage == null) {
         statusBarItem.hide();
         return;
     }
@@ -216,7 +233,8 @@ function updateStatusBar() {
     else if (pct >= 40) icon = '$(info)';
     else icon = '$(check)';
 
-    statusBarItem.text = `${icon} Ctx: ${pct}%`;
+    const sessionPart = metrics.session_usage_pct != null ? ` | S: ${metrics.session_usage_pct}%` : '';
+    statusBarItem.text = `${icon} Ctx: ${pct}%${sessionPart}`;
     statusBarItem.show();
 }
 
