@@ -2,7 +2,7 @@
   "name": "claude-code-compact-guard",
   "displayName": "Claude Code Compact Guard",
   "description": "Proactive compaction prompts for Claude Code - saves tokens by compacting while cache is warm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "publisher": "philipshurpik",
   "engines": {
