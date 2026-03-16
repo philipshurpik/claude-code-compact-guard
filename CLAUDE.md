@@ -7,10 +7,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A cost-saving tool for Claude Code that monitors context window usage and proactively triggers `/compact` before the prompt cache expires (~5 min TTL). Three cooperating components communicate via temp files in `$TMPDIR/claude-code-compact-guard/`:
 
 1. **StatusLine hook** (`hooks/context-monitor.js`, Node.js) — receives live `context_window` data from Claude Code, writes per-session metrics to disk, outputs color-coded status bar.
-2. **Stop hook** (`hooks/compact-check.py`, Python) — fires after every response, reads metrics, decides whether to prompt compaction (threshold: 40%, cooldown: 120s). In CLI mode it blocks Claude with a JSON decision; with the extension present it writes a trigger file instead.
+2. **Stop hook** (`hooks/compact-check.py`, Python) — fires after every response, reads metrics, decides whether to prompt compaction (threshold: 40%, cooldown: 200s). In CLI mode it blocks Claude with a JSON decision; with the extension present it writes a trigger file instead.
 3. **VS Code extension** (`vscode-extension/extension.js`) — heartbeats every 3s to prove it's alive, watches for trigger files, shows native "Run /compact" dialog, sends `/compact` to the Claude terminal.
 
-Extension detection: Stop hook checks `TERM_PROGRAM` env var + heartbeat file freshness (<30s).
+Extension detection: Stop hook checks heartbeat file freshness (<30s). `TERM_PROGRAM` env var is no longer used — heartbeat alone is the reliable signal.
+
+**OAuth usage API quirk:** The StatusLine hook fetches session usage from `api.anthropic.com/api/oauth/usage`. On 429 errors, it refreshes the OAuth token and retries — this is an intentional workaround because 429 from this endpoint typically means the token needs re-authentication, not a standard rate limit.
 
 ## Commands
 

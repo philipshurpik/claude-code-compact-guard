@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const https = require('https');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 const BASE_DIR = process.env.COMPACT_GUARD_TMPDIR || os.tmpdir();
 const METRICS_DIR = path.join(BASE_DIR, 'claude-code-compact-guard');
@@ -22,7 +22,15 @@ const WARN_PCT = 40;
 const DANGER_PCT = 60;
 
 const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+// Public OAuth client ID for Claude Code (used for usage quota API)
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
+
+function getClaudeCodeVersion() {
+  try {
+    return execSync('claude --version', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] })
+      .trim().match(/[\d.]+/)?.[0] || 'unknown';
+  } catch { return 'unknown'; }
+}
 
 function getCredentials() {
   try {
@@ -40,8 +48,9 @@ function getOAuthToken() {
 
 function saveCredentials(creds) {
   const json = JSON.stringify(creds);
-  execSync(
-    `security add-generic-password -U -s "${KEYCHAIN_SERVICE}" -w ${JSON.stringify(json)} -a "default"`,
+  execFileSync(
+    'security',
+    ['add-generic-password', '-U', '-s', KEYCHAIN_SERVICE, '-w', json, '-a', 'default'],
     { stdio: ['pipe', 'pipe', 'pipe'] }
   );
 }
@@ -102,7 +111,7 @@ function callUsageApi(token) {
       headers: {
         'Authorization': `Bearer ${token}`,
         'anthropic-beta': 'oauth-2025-04-20',
-        'User-Agent': 'claude-code/2.1.76',
+        'User-Agent': `claude-code/${getClaudeCodeVersion()}`,
         'Accept': 'application/json',
       },
       timeout: 3000,

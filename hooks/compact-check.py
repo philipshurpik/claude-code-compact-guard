@@ -115,12 +115,6 @@ def set_cooldown(session_id: str):
         f.write('')
 
 
-def is_running_in_editor() -> bool:
-    """Check if this Claude Code session is running inside VS Code / Cursor."""
-    term = os.environ.get('TERM_PROGRAM', '').lower()
-    return term in ('vscode', 'cursor')
-
-
 def is_extension_active() -> bool:
     """Check if the VS Code / Cursor extension is running via heartbeat file."""
     try:

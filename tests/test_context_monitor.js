@@ -58,8 +58,10 @@ describe('metrics file writing', () => {
 
         const metrics = JSON.parse(fs.readFileSync(file, 'utf8'));
         assert.strictEqual(metrics.session_id, 'abc-123');
-        assert.ok(metrics.used_percentage > 0);
-        assert.ok(metrics.context_window_size > 0);
+        // 25% of 200K raw = 50K tokens, effective window = 200K * 0.835 = 167K
+        // usedPct = round(50000 / 167000 * 100) = 30
+        assert.strictEqual(metrics.used_percentage, 30);
+        assert.strictEqual(metrics.context_window_size, 167000);
     });
 
     it('isolates sessions in separate files', () => {
@@ -76,7 +78,9 @@ describe('metrics file writing', () => {
         const metricsA = JSON.parse(fs.readFileSync(path.join(dir, 'metrics-sess-A.json'), 'utf8'));
         const metricsB = JSON.parse(fs.readFileSync(path.join(dir, 'metrics-sess-B.json'), 'utf8'));
 
-        assert.ok(metricsA.used_percentage < metricsB.used_percentage);
+        // A: 25% raw -> 30% effective, B: 70% raw -> 84% effective
+        assert.strictEqual(metricsA.used_percentage, 30);
+        assert.strictEqual(metricsB.used_percentage, 84);
     });
 
     it('uses "unknown" for missing session_id', () => {

@@ -109,7 +109,7 @@ class TestCooldown:
         run_hook(tmp_path, {'session_id': 'sess-1'})
 
         cooldown = tmp_path / 'claude-code-compact-guard' / 'cooldown-sess-1'
-        old_time = time.time() - 200
+        old_time = time.time() - 250
         os.utime(cooldown, (old_time, old_time))
 
         r2 = run_hook(tmp_path, {'session_id': 'sess-1'})
