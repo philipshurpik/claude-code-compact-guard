@@ -51,6 +51,37 @@ Claude responds -> Stop hook fires -> no extension heartbeat detected
 The stop hook auto-detects whether the extension is running. With the extension,
 Claude isn't blocked -- you just get a clean dialog. Without it, you get the CLI fallback.
 
+## Architecture
+
+The three components never talk to each other directly — all communication is via temp files in `$TMPDIR/`:
+
+```
+Claude Code CLI
+    │
+    ├─► StatusLine hook (context-monitor.js)   fires on every token stream update
+    │       reads:  usage-cache.json           (written by Stop hook, 300s TTL)
+    │       writes: metrics-{session_id}.json  (context % + session/weekly usage)
+    │       prints: colored status bar → stdout → Claude Code displays it
+    │
+    └─► Stop hook (compact-check.py)           fires after every response
+            reads:  metrics-{session_id}.json
+            writes: usage-cache.json           (OAuth API fetch)
+                    cooldown-{session_id}      (rate-limit marker)
+                    trigger.json              (if extension heartbeat is fresh)
+
+VS Code Extension (extension.js)
+    ├─ writes: claude-code-compact-guard-active   heartbeat every 3s
+    ├─ reads:  metrics-{session_id}.json          polls every 3s → status bar
+    └─ watches: trigger.json
+                    → shows "Run /compact?" dialog
+                    → sends /compact to Claude terminal
+```
+
+Session usage data (five-hour quota, weekly quota, resets_at) flows backwards through the cache:
+Stop hook fetches the OAuth API → writes `usage-cache.json` → StatusLine reads it and includes
+`session_usage_pct`, `session_resets_at`, `weekly_usage_pct` in the metrics file → extension
+displays these in the status bar tooltip and the "Show Context Status" notification.
+
 ## Quick Install
 
 ```bash
@@ -184,9 +215,11 @@ If you ignore the warning:
 - "Dismiss" - ignore this time (cooldown still applies)
 
 **Status bar** - shows context percentage in the bottom bar with icons:
-- `$(check) Ctx: 25%` when healthy
-- `$(info) Ctx: 45%` when approaching threshold
-- `$(warning) Ctx: 70%` when high
+- `$(check) Ctx: 25% | S: 11%` when healthy
+- `$(info) Ctx: 45% | S: 30%` when approaching threshold
+- `$(warning) Ctx: 70% | S: 55%` when high
+
+Hover the status bar item to see full details: `Context: 25% | Session: 11% (resets in 3h 42m) | Weekly: 36%`
 
 Updates every 3 seconds when a Claude Code session is active.
 
@@ -200,10 +233,10 @@ If not found, it falls back to the active terminal. If no terminal is found at a
 
 ## Limitations
 
-- **macOS only for session usage tracking** - The StatusLine hook reads OAuth credentials
-  from the macOS Keychain (`security` CLI) to fetch session usage quota from the Anthropic API.
+- **macOS only for session usage tracking** - The Stop hook reads OAuth credentials
+  from the macOS Keychain (`security` CLI) to fetch session/weekly usage quota from the Anthropic API.
   On non-macOS systems, context monitoring and compaction still work fully — only the
-  `⚡ session%` indicator in the status line will be absent.
+  session % and weekly % indicators will be absent.
 - **Cannot auto-trigger /compact from CLI hooks** - Claude Code doesn't expose `/compact` as
   a programmable action from hooks. The Stop hook can only ask Claude to tell you.
   The VS Code/Cursor extension solves this via `terminal.sendText`.
@@ -235,7 +268,8 @@ Installed locations:
 ```
 
 Temp files (auto-managed, in `/tmp/`):
-- `claude-code-compact-guard/metrics-{session_id}.json` - per-session context metrics (written by StatusLine)
+- `claude-code-compact-guard/metrics-{session_id}.json` - per-session context + usage metrics (written by StatusLine)
+- `claude-code-compact-guard/usage-cache.json` - OAuth API response cache, 300s TTL (written by Stop hook)
 - `claude-code-compact-guard/cooldown-{session_id}` - per-session cooldown marker
 - `claude-code-compact-guard-trigger.json` - extension trigger (written by Stop hook)
 - `claude-code-compact-guard-active` - extension heartbeat (tells Stop hook to skip blocking)

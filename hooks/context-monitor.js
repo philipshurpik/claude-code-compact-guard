@@ -51,7 +51,10 @@ process.stdin.on('end', () => {
     // Read usage quota from cache (written by compact-check.py Stop hook)
     const usage = readUsageCache();
     const fiveHour = usage?.five_hour;
+    const sevenDay = usage?.seven_day;
     const sessionUsagePct = fiveHour ? Math.round(fiveHour.utilization) : null;
+    const sessionResetsAt = fiveHour?.resets_at ?? null;
+    const weeklyUsagePct = sevenDay ? Math.round(sevenDay.utilization) : null;
 
     // Write metrics for the Stop hook to read
     const metrics = {
@@ -64,6 +67,8 @@ process.stdin.on('end', () => {
       cache_read_input_tokens: currentUsage.cache_read_input_tokens ?? 0,
       cache_creation_input_tokens: currentUsage.cache_creation_input_tokens ?? 0,
       session_usage_pct: sessionUsagePct,
+      session_resets_at: sessionResetsAt,
+      weekly_usage_pct: weeklyUsagePct,
       model_id: model.id ?? 'unknown',
       session_id: data.session_id ?? '',
       cwd: cwd,

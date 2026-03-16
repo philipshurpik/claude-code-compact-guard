@@ -49,9 +49,14 @@ function activate(context) {
             const windowK = Math.round(metrics.context_window_size / 1000);
             const usedK = Math.round((metrics.used_percentage / 100) * metrics.context_window_size / 1000);
             const ago = metrics.timestamp ? formatTimeAgo(metrics.timestamp) : '?';
-            const sessionUsage = metrics.session_usage_pct != null ? ` | Session: ${metrics.session_usage_pct}%` : '';
+            let sessionPart = '';
+            if (metrics.session_usage_pct != null) {
+                const resetsIn = formatResetsIn(metrics.session_resets_at);
+                sessionPart = ` | Session: ${metrics.session_usage_pct}%${resetsIn ? ` (resets in ${resetsIn})` : ''}`;
+            }
+            const weeklyPart = metrics.weekly_usage_pct != null ? ` | Weekly: ${metrics.weekly_usage_pct}%` : '';
             vscode.window.showInformationMessage(
-                `Claude Code: ${metrics.used_percentage}% (${usedK}K/${windowK}K) | ${ago}${sessionUsage}`
+                `Claude Code: ${metrics.used_percentage}% (${usedK}K/${windowK}K) | ${ago}${sessionPart}${weeklyPart}`
             );
         })
     );
@@ -163,6 +168,16 @@ function findClaudeTerminal() {
     return null;
 }
 
+function formatResetsIn(resetsAt) {
+    if (!resetsAt) return null;
+    const ms = new Date(resetsAt) - Date.now();
+    if (ms <= 0) return null;
+    const totalMin = Math.round(ms / 60000);
+    const hr = Math.floor(totalMin / 60);
+    const min = totalMin % 60;
+    return hr > 0 ? `${hr}h ${min}m` : `${min}m`;
+}
+
 function formatTimeAgo(timestampMs) {
     const seconds = Math.round((Date.now() - timestampMs) / 1000);
     if (seconds < 60) return `${seconds}s ago`;
@@ -251,6 +266,15 @@ function updateStatusBar() {
 
     const sessionPart = metrics.session_usage_pct != null ? ` | S: ${metrics.session_usage_pct}%` : '';
     statusBarItem.text = `${icon} Ctx: ${pct}%${sessionPart}`;
+
+    const tooltipParts = [`Context: ${pct}%`];
+    if (metrics.session_usage_pct != null) {
+        const resetsIn = formatResetsIn(metrics.session_resets_at);
+        tooltipParts.push(`Session: ${metrics.session_usage_pct}%${resetsIn ? ` (resets in ${resetsIn})` : ''}`);
+    }
+    if (metrics.weekly_usage_pct != null) tooltipParts.push(`Weekly: ${metrics.weekly_usage_pct}%`);
+    statusBarItem.tooltip = tooltipParts.join(' | ');
+
     statusBarItem.show();
 }
 
