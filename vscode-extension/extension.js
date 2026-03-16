@@ -193,8 +193,8 @@ function readMetrics() {
         for (const file of files) {
             const full = path.join(METRICS_DIR, file);
             const mtime = fs.statSync(full).mtimeMs;
-            // Clean up metrics files older than 1 hour
-            if (now - mtime > 3600000) {
+            // Clean up metrics files older than 24 hours
+            if (now - mtime > 3600000 * 24) {
                 try { fs.unlinkSync(full); } catch { /* ignore */ }
                 continue;
             }
