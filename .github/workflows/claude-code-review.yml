@@ -1,0 +1,65 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+    paths:
+      - "**/*.py"
+  issue_comment:
+    types: [created]
+
+jobs:
+  claude-review:
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '@review'))
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      checks: read
+      statuses: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Get PR number
+        id: pr-number
+        run: |
+          if [ "${{ github.event_name }}" == "issue_comment" ]; then
+            echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          settings: |
+            {
+              "availableModels": ["sonnet", "haiku"]
+            }
+          prompt: |
+            /code-review:code-review ${{ github.repository }}/pull/${{ steps.pr-number.outputs.number }} --comment
+
+            IMPORTANT: When using gh CLI, always use the --repo flag with the full repository name.
+            Correct: gh pr view 136 --repo owner/repo
+            Wrong: gh pr view owner/repo/pull/136
+          claude_args: '--model sonnet --allowedTools "Bash(gh pr:*),Bash(gh api:*),Read,Glob,Grep"'
+          allowed_bots: 'claude[bot]'
+          show_full_output: true
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://code.claude.com/docs/en/cli-reference for available options
