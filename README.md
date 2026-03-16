@@ -167,8 +167,8 @@ windsurf --install-extension compact-guard-0.1.0.vsix --force
 Edit `~/.claude/hooks/compact-check.py`:
 
 ```python
-# When to suggest compaction (percentage of context used)
-COMPACT_THRESHOLD_PCT = 40
+# When to suggest compaction (absolute input tokens)
+COMPACT_THRESHOLD_TOKENS = 80_000
 
 # Don't nag more than once per N seconds
 COOLDOWN_SECONDS = 200
@@ -177,24 +177,24 @@ COOLDOWN_SECONDS = 200
 Edit `~/.claude/hooks/context-monitor.js`:
 
 ```javascript
-// StatusLine color thresholds
-const WARN_PCT = 40;   // yellow
-const DANGER_PCT = 60;  // red
+// StatusLine color thresholds (absolute input tokens)
+const WARN_TOKENS = 60_000;    // yellow
+const DANGER_TOKENS = 80_000;  // orange
 ```
 
 ### Recommended thresholds
 
 | Style | Stop hook threshold | Notes |
 |-------|-------------------|-------|
-| Aggressive (cheapest) | 30% | Frequent compaction, short context |
-| Balanced | 40-50% | Good tradeoff for most workflows |
-| Conservative | 65% | More context, higher risk of expensive uncached calls |
+| Aggressive (cheapest) | 60K tokens | Frequent compaction, short context |
+| Balanced | 80K tokens | Good tradeoff for most workflows |
+| Conservative | 120K tokens | More context, higher risk of expensive uncached calls |
 
 ## What happens in practice
 
 1. You chat with Claude, context grows
 2. Claude finishes a response at 42% context
-3. Stop hook fires, reads metrics, sees 42% > 40%
+3. Stop hook fires, reads metrics, sees token count > 80K
 4. **With extension**: hook writes trigger file and exits cleanly (no block).
    Extension shows warning dialog with "Run /compact" button.
    **Without extension**: hook blocks Claude, which warns you in chat.

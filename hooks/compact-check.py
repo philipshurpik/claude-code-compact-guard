@@ -11,9 +11,9 @@ import time
 import urllib.request
 
 # --- Configuration ---
-# Compact suggestion threshold (percentage of context window used).
-# When context exceeds this, the hook blocks Claude and asks user to /compact.
-COMPACT_THRESHOLD_PCT = 40
+# Compact suggestion threshold in tokens (absolute, model-agnostic).
+# When total input tokens exceed this, the hook blocks Claude and asks user to /compact.
+COMPACT_THRESHOLD_TOKENS = 80_000
 
 # Cooldown: don't nag more than once per N seconds
 COOLDOWN_SECONDS = 200
@@ -26,10 +26,6 @@ USAGE_CACHE_FILE = os.path.join(METRICS_DIR, 'usage-cache.json')
 USAGE_FETCH_LOCK_FILE = os.path.join(METRICS_DIR, '.usage-fetch-lock')
 
 HEARTBEAT_MAX_AGE_SECONDS = 30
-
-# Claude Code reserves ~16.5% of context window for autocompact buffer
-AUTOCOMPACT_BUFFER_RATIO = 0.165
-CONTEXT_WINDOW_SIZE = 200000
 
 
 def sanitize_session_id(session_id: str) -> str:
@@ -47,17 +43,23 @@ def read_metrics(session_id: str) -> dict | None:
 
 
 def estimate_metrics_from_transcript(transcript_path: str, session_id: str, cwd: str = '') -> dict | None:
-    """Estimate context metrics from transcript when StatusLine hook hasn't fired (VS Code mode)."""
+    """Extract token counts from transcript (VS Code mode — StatusLine hook doesn't fire there).
+
+    Returns only raw token data; context_window_size and used_percentage are filled in main()
+    from the cached metrics file written by context-monitor.js (which has the real window size
+    from the live API — no model→size mapping needed here).
+    """
     try:
         with open(transcript_path) as f:
             content = f.read().strip()
         if not content:
             return None
 
-        if content.startswith('['):
-            entries = json.loads(content)
-        else:
-            entries = [json.loads(line) for line in content.splitlines() if line.strip()]
+        entries = (
+            json.loads(content)
+            if content.startswith('[')
+            else [json.loads(line) for line in content.splitlines() if line.strip()]
+        )
 
         last_usage = None
         total_output = 0
@@ -77,14 +79,8 @@ def estimate_metrics_from_transcript(transcript_path: str, session_id: str, cwd:
         cache_read = last_usage.get('cache_read_input_tokens', 0)
         total_input = input_tokens + cache_creation + cache_read
 
-        effective_window = round(CONTEXT_WINDOW_SIZE * (1 - AUTOCOMPACT_BUFFER_RATIO))
-        used_pct = min(100, round(total_input / effective_window * 100))
-
         return {
             'timestamp': int(time.time() * 1000),
-            'used_percentage': used_pct,
-            'remaining_percentage': 100 - used_pct,
-            'context_window_size': effective_window,
             'total_input_tokens': total_input,
             'total_output_tokens': total_output,
             'cache_read_input_tokens': cache_read,
@@ -356,18 +352,24 @@ def main():
     session_id = input_data.get('session_id', 'unknown')
     cwd = input_data.get('cwd', '')
 
-    # Prefer transcript estimation (always fresh) over cached metrics file.
-    # StatusLine hook writes metrics in CLI mode, but doesn't fire in VS Code/Cursor.
-    # Transcript is always up-to-date since Stop hook fires after every response.
-    metrics = None
+    # Transcript gives fresh token counts; cached metrics (written by context-monitor.js) supply
+    # the real context_window_size from the live API. Merge both when available.
     transcript_path = input_data.get('transcript_path', '')
-    if transcript_path:
-        metrics = estimate_metrics_from_transcript(transcript_path, session_id, cwd)
+    transcript_metrics = estimate_metrics_from_transcript(transcript_path, session_id, cwd) if transcript_path else None
+    cached_metrics = read_metrics(session_id)
 
-    if not metrics:
-        metrics = read_metrics(session_id)
-
-    if not metrics:
+    if transcript_metrics:
+        # Fill in window size + used_pct from cached metrics (context-monitor.js wrote the real value).
+        window_size = (cached_metrics or {}).get('context_window_size', 0)
+        transcript_metrics['context_window_size'] = window_size
+        if window_size:
+            total = transcript_metrics['total_input_tokens']
+            transcript_metrics['used_percentage'] = min(100, round(total / window_size * 100))
+            transcript_metrics['remaining_percentage'] = 100 - transcript_metrics['used_percentage']
+        metrics = transcript_metrics
+    elif cached_metrics:
+        metrics = cached_metrics
+    else:
         sys.exit(0)
 
     # Fetch session usage quota (once per 300s, locked to one process at a time)
@@ -381,8 +383,8 @@ def main():
         metrics['cwd'] = cwd
     write_metrics(metrics)
 
-    used_pct = metrics.get('used_percentage', 0)
-    if used_pct < COMPACT_THRESHOLD_PCT:
+    tokens_used = metrics.get('total_input_tokens', 0)
+    if tokens_used < COMPACT_THRESHOLD_TOKENS:
         sys.exit(0)
 
     if is_in_cooldown(session_id):
@@ -391,8 +393,9 @@ def main():
     set_cooldown(session_id)
 
     # Calculate useful stats for the message
-    window_size = metrics.get('context_window_size', 200000)
-    tokens_used_k = round((used_pct / 100) * window_size / 1000)
+    used_pct = metrics.get('used_percentage', 0)
+    window_size = metrics.get('context_window_size', 0)
+    tokens_used_k = round(tokens_used / 1000)
     window_k = round(window_size / 1000)
 
     write_vscode_trigger(used_pct, tokens_used_k, window_k)

@@ -14,12 +14,12 @@ const METRICS_DIR = path.join(BASE_DIR, 'claude-code-compact-guard');
 const USAGE_CACHE_FILE = path.join(METRICS_DIR, 'usage-cache.json');
 const USAGE_CACHE_TTL_MS = 300000; // Consider cache valid for 300s
 
-// Autocompact buffer ratio (Claude Code reserves ~16.5% for autocompact)
-const AUTOCOMPACT_BUFFER_RATIO = 0.165;
+// Autocompact buffer (Claude Code reserves ~33K tokens for autocompact)
+const AUTOCOMPACT_BUFFER_TOKENS = 33_000;
 
-// Thresholds for status line color coding (against effective/usable window)
-const WARN_PCT = 40;
-const DANGER_PCT = 60;
+// Thresholds for status line color coding (absolute tokens, model-agnostic)
+const WARN_TOKENS = 60_000;
+const DANGER_TOKENS = 80_000;
 
 function readUsageCache() {
   try {
@@ -44,7 +44,7 @@ process.stdin.on('end', () => {
     const currentUsage = ctx.current_usage || {};
 
     // Recalculate percentage against effective window (excluding autocompact buffer)
-    const effectiveWindow = Math.round(windowSize * (1 - AUTOCOMPACT_BUFFER_RATIO));
+    const effectiveWindow = windowSize - AUTOCOMPACT_BUFFER_TOKENS;
     const tokensUsed = Math.round((rawUsedPct / 100) * windowSize);
     const usedPct = Math.min(100, Math.round((tokensUsed / effectiveWindow) * 100));
 
@@ -80,11 +80,12 @@ process.stdin.on('end', () => {
     const sessionMetricsFile = path.join(METRICS_DIR, `metrics-${sessionId}.json`);
     fs.writeFileSync(sessionMetricsFile, JSON.stringify(metrics, null, 2));
 
-    // Color-coded status line output
+    // Color-coded status line output (based on absolute token count, not %)
+    const inputTokens = ctx.total_input_tokens ?? tokensUsed;
     let color;
-    if (usedPct >= DANGER_PCT) {
+    if (inputTokens >= DANGER_TOKENS) {
       color = '\x1b[38;5;208m'; // orange
-    } else if (usedPct >= WARN_PCT) {
+    } else if (inputTokens >= WARN_TOKENS) {
       color = '\x1b[33m'; // yellow
     } else {
       color = '\x1b[32m'; // green

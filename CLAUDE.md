@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A cost-saving tool for Claude Code that monitors context window usage and proactively triggers `/compact` before the prompt cache expires (~5 min TTL). Three cooperating components communicate via temp files in `$TMPDIR/claude-code-compact-guard/`:
 
 1. **StatusLine hook** (`hooks/context-monitor.js`, Node.js) — receives live `context_window` data from Claude Code, writes per-session metrics to disk, outputs color-coded status bar.
-2. **Stop hook** (`hooks/compact-check.py`, Python) — fires after every response, reads metrics, decides whether to prompt compaction (threshold: 40%, cooldown: 200s). In CLI mode it blocks Claude with a JSON decision; with the extension present it writes a trigger file instead.
+2. **Stop hook** (`hooks/compact-check.py`, Python) — fires after every response, reads metrics, decides whether to prompt compaction (threshold: 80K tokens, cooldown: 200s). In CLI mode it blocks Claude with a JSON decision; with the extension present it writes a trigger file instead.
 3. **VS Code extension** (`vscode-extension/extension.js`) — heartbeats every 3s to prove it's alive, watches for trigger files, shows native "Run /compact" dialog, sends `/compact` to the Claude terminal.
 
 Extension detection: Stop hook checks heartbeat file freshness (<30s). `TERM_PROGRAM` env var is no longer used — heartbeat alone is the reliable signal.
