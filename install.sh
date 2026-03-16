@@ -89,8 +89,9 @@ INSTALLED_EDITORS=""
 
 find_vsix() { ls "$SCRIPT_DIR"/*.vsix 2>/dev/null | head -1; }
 
-# Auto-build VSIX from source if not present
-if [ -z "$(find_vsix)" ] && [ -d "$EXT_DIR" ]; then
+# Always rebuild VSIX from source to avoid stale builds
+if [ -d "$EXT_DIR" ]; then
+    rm -f "$SCRIPT_DIR"/*.vsix
     echo ""
     if command -v npx &>/dev/null; then
         echo "Building extension from source..."
