@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check context usage after each response and prompt compaction if threshold exceeded."""
 
+import functools
 import json
 import os
 import re
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 # --- Configuration ---
@@ -175,6 +177,7 @@ def _save_credentials(creds: dict):
         pass
 
 
+@functools.lru_cache(maxsize=1)
 def _get_claude_code_version() -> str:
     try:
         out = subprocess.check_output(['claude', '--version'], stderr=subprocess.DEVNULL, text=True).strip()
@@ -184,8 +187,8 @@ def _get_claude_code_version() -> str:
         return 'unknown'
 
 
-def _call_usage_api(token: str) -> dict | None:
-    """Call the OAuth usage API. Returns parsed JSON on success, None on failure."""
+def _call_usage_api(token: str) -> tuple[dict | None, int]:
+    """Call the OAuth usage API. Returns (parsed JSON, status_code). Status 0 means network error."""
     req = urllib.request.Request(
         'https://api.anthropic.com/api/oauth/usage',
         headers={
@@ -197,9 +200,11 @@ def _call_usage_api(token: str) -> dict | None:
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read())
+            return json.loads(resp.read()), resp.status
+    except urllib.error.HTTPError as e:
+        return None, e.code
     except Exception:
-        return None
+        return None, 0
 
 
 def _refresh_oauth_token() -> str | None:
@@ -220,6 +225,7 @@ def _refresh_oauth_token() -> str | None:
         data=post_data,
         headers={
             'Content-Type': 'application/json',
+            'Content-Length': str(len(post_data)),
             'User-Agent': f'claude-code/{_get_claude_code_version()}',
         },
         method='POST',
@@ -263,17 +269,20 @@ def _write_usage_cache(usage: dict):
 
 def _acquire_fetch_lock() -> bool:
     """File-based lock ensuring only one process fetches usage at a time."""
+    os.makedirs(METRICS_DIR, exist_ok=True)
     try:
-        stat = os.stat(USAGE_FETCH_LOCK_FILE)
-        if time.time() - stat.st_mtime < USAGE_FETCH_LOCK_TTL:
-            return False
-    except FileNotFoundError:
-        pass
-    try:
-        os.makedirs(METRICS_DIR, exist_ok=True)
-        with open(USAGE_FETCH_LOCK_FILE, 'w') as f:
-            f.write(str(os.getpid()))
+        fd = os.open(USAGE_FETCH_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
         return True
+    except FileExistsError:
+        try:
+            if time.time() - os.stat(USAGE_FETCH_LOCK_FILE).st_mtime < USAGE_FETCH_LOCK_TTL:
+                return False
+            os.unlink(USAGE_FETCH_LOCK_FILE)
+        except OSError:
+            pass
+        return False
     except OSError:
         return False
 
@@ -304,13 +313,13 @@ def fetch_session_usage() -> int | None:
         if not token:
             return None
 
-        usage = _call_usage_api(token)
+        usage, status = _call_usage_api(token)
 
-        # On failure (likely 429 / expired token), refresh and retry once
-        if not usage:
+        # Only refresh token on 429 (typically means stale token, not rate limit)
+        if not usage and status == 429:
             new_token = _refresh_oauth_token()
             if new_token:
-                usage = _call_usage_api(new_token)
+                usage, status = _call_usage_api(new_token)
 
         if not usage:
             stale = _read_usage_cache(ignore_expiry=True)
