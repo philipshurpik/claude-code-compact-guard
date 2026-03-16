@@ -83,6 +83,50 @@ describe('metrics file writing', () => {
         assert.strictEqual(metricsB.used_percentage, 84);
     });
 
+    it('preserves last_interaction_time when tokens unchanged', () => {
+        const sid = 'time-test';
+        const input = makeInput({ session_id: sid });
+
+        // First run — sets last_interaction_time
+        runHook(input, tmpDir);
+        const file = path.join(tmpDir, 'claude-code-compact-guard', `metrics-${sid}.json`);
+        const m1 = JSON.parse(fs.readFileSync(file, 'utf8'));
+        assert.ok(m1.last_interaction_time, 'should have last_interaction_time');
+
+        // Backdate it to verify it's preserved (not overwritten)
+        const backdated = m1.last_interaction_time - 60000;
+        m1.last_interaction_time = backdated;
+        fs.writeFileSync(file, JSON.stringify(m1));
+
+        // Second run with same tokens — should keep backdated time
+        runHook(input, tmpDir);
+        const m2 = JSON.parse(fs.readFileSync(file, 'utf8'));
+        assert.strictEqual(m2.last_interaction_time, backdated, 'time should be preserved when tokens unchanged');
+    });
+
+    it('updates last_interaction_time when tokens change', () => {
+        const sid = 'time-change';
+        const input1 = makeInput({ session_id: sid });
+
+        runHook(input1, tmpDir);
+        const file = path.join(tmpDir, 'claude-code-compact-guard', `metrics-${sid}.json`);
+        const m1 = JSON.parse(fs.readFileSync(file, 'utf8'));
+
+        // Backdate
+        m1.last_interaction_time = m1.last_interaction_time - 60000;
+        fs.writeFileSync(file, JSON.stringify(m1));
+        const backdated = m1.last_interaction_time;
+
+        // Run with different token counts
+        const input2 = makeInput({
+            session_id: sid,
+            context_window: { ...makeInput().context_window, total_input_tokens: 60000 },
+        });
+        runHook(input2, tmpDir);
+        const m2 = JSON.parse(fs.readFileSync(file, 'utf8'));
+        assert.ok(m2.last_interaction_time > backdated, 'time should update when tokens change');
+    });
+
     it('uses "unknown" for missing session_id', () => {
         const input = makeInput();
         delete input.session_id;
