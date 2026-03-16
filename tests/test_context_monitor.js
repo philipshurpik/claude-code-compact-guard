@@ -132,17 +132,17 @@ describe('status line output', () => {
         assert.ok(!output.includes('⎇'), 'no branch without cwd');
     });
 
-    it('outputs yellow bar at warning level', () => {
+    it('outputs yellow bar at warning level (60K-80K tokens)', () => {
         const input = makeInput({
-            context_window: { ...makeInput().context_window, used_percentage: 40 },
+            context_window: { ...makeInput().context_window, total_input_tokens: 65_000 },
         });
         const output = runHook(input, tmpDir);
         assert.ok(output.includes('\x1b[33m'), 'expected yellow ANSI code');
     });
 
-    it('outputs orange bar at danger level', () => {
+    it('outputs orange bar at danger level (>=80K tokens)', () => {
         const input = makeInput({
-            context_window: { ...makeInput().context_window, used_percentage: 75 },
+            context_window: { ...makeInput().context_window, total_input_tokens: 85_000 },
         });
         const output = runHook(input, tmpDir);
         assert.ok(output.includes('\x1b[38;5;208m'), 'expected orange ANSI code');
