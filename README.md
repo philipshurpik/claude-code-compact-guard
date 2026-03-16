@@ -12,7 +12,8 @@ Save money by compacting context while the API cache is still warm.
 
 Claude Code's auto-compact only triggers when a **new message** is sent and context exceeds ~83%.
 If you wait 5+ minutes between messages, the prompt cache expires. That means your next message
-sends the entire conversation (e.g. 160K tokens) **without cache** - costing significantly more.
+sends the entire conversation (e.g. 160K tokens) **without cache** - costing significantly more 
+(or eating 10 times faster your Pro/Max plan quota).
 
 ## The Solution
 
@@ -139,7 +140,7 @@ Edit `~/.claude/hooks/compact-check.py`:
 COMPACT_THRESHOLD_PCT = 40
 
 # Don't nag more than once per N seconds
-COOLDOWN_SECONDS = 120
+COOLDOWN_SECONDS = 200
 ```
 
 Edit `~/.claude/hooks/context-monitor.js`:
@@ -172,7 +173,7 @@ const DANGER_PCT = 60;  // red
 8. You continue working
 
 If you ignore the warning:
-- Cooldown prevents nagging for 2 minutes
+- Cooldown prevents nagging for ~3 minutes
 - Claude's built-in auto-compact still fires at ~83% as usual
 - But by then context is large and possibly uncached - exactly what we're trying to avoid
 
@@ -199,6 +200,10 @@ If not found, it falls back to the active terminal. If no terminal is found at a
 
 ## Limitations
 
+- **macOS only for session usage tracking** - The StatusLine hook reads OAuth credentials
+  from the macOS Keychain (`security` CLI) to fetch session usage quota from the Anthropic API.
+  On non-macOS systems, context monitoring and compaction still work fully — only the
+  `⚡ session%` indicator in the status line will be absent.
 - **Cannot auto-trigger /compact from CLI hooks** - Claude Code doesn't expose `/compact` as
   a programmable action from hooks. The Stop hook can only ask Claude to tell you.
   The VS Code/Cursor extension solves this via `terminal.sendText`.
@@ -230,10 +235,10 @@ Installed locations:
 ```
 
 Temp files (auto-managed, in `/tmp/`):
-- `claude-compact-guard/metrics-{session_id}.json` - per-session context metrics (written by StatusLine)
-- `claude-compact-guard/cooldown-{session_id}` - per-session cooldown marker
-- `claude-compact-trigger.json` - extension trigger (written by Stop hook)
-- `claude-compact-guard-active` - extension heartbeat (tells Stop hook to skip blocking)
+- `claude-code-compact-guard/metrics-{session_id}.json` - per-session context metrics (written by StatusLine)
+- `claude-code-compact-guard/cooldown-{session_id}` - per-session cooldown marker
+- `claude-code-compact-guard-trigger.json` - extension trigger (written by Stop hook)
+- `claude-code-compact-guard-active` - extension heartbeat (tells Stop hook to skip blocking)
 
 ## Uninstall
 
@@ -248,7 +253,7 @@ cursor --uninstall-extension compact-guard.compact-guard
 windsurf --uninstall-extension compact-guard.compact-guard
 
 # Clean up temp files
-rm -rf /tmp/claude-compact-guard /tmp/claude-compact-trigger.json /tmp/claude-compact-guard-active
+rm -rf /tmp/claude-code-compact-guard /tmp/claude-code-compact-guard-trigger.json /tmp/claude-code-compact-guard-active
 ```
 
 Then remove the `statusLine` and `Stop` hook entries from `~/.claude/settings.json`.

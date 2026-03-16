@@ -84,24 +84,27 @@ echo ""
 echo "✓ Updated $SETTINGS_FILE"
 
 # 4. Build and install VS Code / Cursor extension
-VSIX_FILE="$SCRIPT_DIR/compact-guard-0.1.0.vsix"
 EXT_DIR="$SCRIPT_DIR/vscode-extension"
 INSTALLED_EDITORS=""
 
-# Auto-build VSIX from source if not present
-if [ ! -f "$VSIX_FILE" ] && [ -d "$EXT_DIR" ]; then
+find_vsix() { ls "$SCRIPT_DIR"/*.vsix 2>/dev/null | head -1; }
+
+# Always rebuild VSIX from source to avoid stale builds
+if [ -d "$EXT_DIR" ]; then
+    rm -f "$SCRIPT_DIR"/*.vsix
     echo ""
     if command -v npx &>/dev/null; then
         echo "Building extension from source..."
-        (cd "$EXT_DIR" && npx @vscode/vsce package --allow-missing-repository 2>/dev/null && mv *.vsix "$SCRIPT_DIR/") && \
-            echo "✓ Built $VSIX_FILE" || \
-            echo "✗ Failed to build extension (npx @vscode/vsce package failed)"
+        (cd "$EXT_DIR" && npm install --save-dev @vscode/vsce 2>/dev/null && npx @vscode/vsce package --allow-missing-repository && mv *.vsix "$SCRIPT_DIR/") && \
+            echo "✓ Built extension" || \
+            echo "✗ Failed to build extension (run 'cd vscode-extension && npx @vscode/vsce package' to see errors)"
     else
         echo "⚠️  npx not found - cannot build extension. Install Node.js or download .vsix from GitHub releases."
     fi
 fi
 
-if [ -f "$VSIX_FILE" ]; then
+VSIX_FILE="$(find_vsix)"
+if [ -n "$VSIX_FILE" ]; then
     echo ""
     # Try VS Code
     if command -v code &>/dev/null; then

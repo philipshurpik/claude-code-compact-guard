@@ -4,7 +4,7 @@
   "description": "Proactive compaction prompts for Claude Code - saves tokens by compacting while cache is warm",
   "version": "0.1.0",
   "license": "MIT",
-  "publisher": "Philip Shurpik",
+  "publisher": "philipshurpik",
   "engines": {
     "vscode": "^1.85.0"
   },

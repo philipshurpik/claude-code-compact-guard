@@ -45,7 +45,7 @@ jobs:
 
             Or install manually - see [README](https://github.com/${{ github.repository }}#manual-install).
           files: |
-            compact-guard-*.vsix
+            *.vsix
             hooks/context-monitor.js
             hooks/compact-check.py
             install.sh
