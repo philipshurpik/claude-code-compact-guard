@@ -220,9 +220,6 @@ function readMetrics() {
 
         const metrics = JSON.parse(fs.readFileSync(chosen, 'utf8'));
 
-        // Ignore stale metrics (older than 5 minutes — no active session)
-        if (metrics.timestamp && (now - metrics.timestamp) > 300000) return null;
-
         return metrics;
     } catch {
         return null;
