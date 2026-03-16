@@ -41,7 +41,7 @@ def read_metrics(session_id: str) -> dict | None:
         return None
 
 
-def estimate_metrics_from_transcript(transcript_path: str, session_id: str) -> dict | None:
+def estimate_metrics_from_transcript(transcript_path: str, session_id: str, cwd: str = '') -> dict | None:
     """Estimate context metrics from transcript when StatusLine hook hasn't fired (VS Code mode)."""
     try:
         with open(transcript_path) as f:
@@ -85,6 +85,7 @@ def estimate_metrics_from_transcript(transcript_path: str, session_id: str) -> d
             'cache_read_input_tokens': cache_read,
             'cache_creation_input_tokens': cache_creation,
             'session_id': session_id,
+            'cwd': cwd,
         }
     except Exception:
         return None
@@ -158,6 +159,7 @@ def main():
         sys.exit(0)
 
     session_id = input_data.get('session_id', 'unknown')
+    cwd = input_data.get('cwd', '')
 
     # Prefer transcript estimation (always fresh) over cached metrics file.
     # StatusLine hook writes metrics in CLI mode, but doesn't fire in VS Code/Cursor.
@@ -165,15 +167,19 @@ def main():
     metrics = None
     transcript_path = input_data.get('transcript_path', '')
     if transcript_path:
-        metrics = estimate_metrics_from_transcript(transcript_path, session_id)
-        if metrics:
-            write_metrics(metrics)
+        metrics = estimate_metrics_from_transcript(transcript_path, session_id, cwd)
 
     if not metrics:
         metrics = read_metrics(session_id)
 
     if not metrics:
         sys.exit(0)
+
+    # Always write metrics so the extension can display context % in its status bar,
+    # regardless of whether we're above the compact threshold.
+    if cwd and not metrics.get('cwd'):
+        metrics['cwd'] = cwd
+    write_metrics(metrics)
 
     used_pct = metrics.get('used_percentage', 0)
     if used_pct < COMPACT_THRESHOLD_PCT:

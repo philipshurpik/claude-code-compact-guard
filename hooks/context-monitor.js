@@ -159,6 +159,7 @@ process.stdin.on('end', async () => {
     const ctx = data.context_window || {};
     const model = data.model || {};
 
+    const cwd = data.cwd || '';
     const rawUsedPct = ctx.used_percentage ?? 0;
     const windowSize = ctx.context_window_size ?? 200000;
     const currentUsage = ctx.current_usage || {};
@@ -186,6 +187,7 @@ process.stdin.on('end', async () => {
       session_usage_pct: sessionUsagePct,
       model_id: model.id ?? 'unknown',
       session_id: data.session_id ?? '',
+      cwd: cwd,
     };
 
     // Write session-scoped metrics file so multiple sessions don't conflict
@@ -207,7 +209,6 @@ process.stdin.on('end', async () => {
     const dimColor = '\x1b[38;5;238m';
 
     const modelName = model.display_name ?? 'Claude';
-    const cwd = data.cwd || '';
 
     // Get project name and git branch
     const project = cwd ? path.basename(cwd) : '';

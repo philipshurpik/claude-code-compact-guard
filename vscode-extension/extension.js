@@ -185,42 +185,39 @@ function readMetrics() {
 
         const now = Date.now();
         const workspacePaths = getWorkspacePaths();
-        let latest = null;
-        let latestMtime = 0;
-        let workspaceMatch = null;
-        let workspaceMatchMtime = 0;
 
+        // First pass: collect file info and clean up old files.
+        // Only stat files here — don't read contents yet (avoids TOCTOU races).
+        const candidates = [];
         for (const file of files) {
             const full = path.join(METRICS_DIR, file);
-            const mtime = fs.statSync(full).mtimeMs;
-            // Clean up metrics files older than 24 hours
+            let mtime;
+            try { mtime = fs.statSync(full).mtimeMs; } catch { continue; }
             if (now - mtime > 3600000 * 24) {
                 try { fs.unlinkSync(full); } catch { /* ignore */ }
                 continue;
             }
-            if (mtime > latestMtime) {
-                latestMtime = mtime;
-                latest = full;
-            }
-            // Track best workspace-matching file separately
-            if (mtime > workspaceMatchMtime) {
-                try {
-                    const m = JSON.parse(fs.readFileSync(full, 'utf8'));
-                    if (m.cwd && workspacePaths.some(wp => m.cwd === wp || m.cwd.startsWith(wp + path.sep))) {
-                        workspaceMatch = full;
-                        workspaceMatchMtime = mtime;
-                    }
-                } catch { /* ignore parse errors */ }
+            candidates.push({ full, mtime });
+        }
+
+        if (candidates.length === 0) return null;
+
+        // Sort by mtime descending — most recent first
+        candidates.sort((a, b) => b.mtime - a.mtime);
+
+        // Pick the best file: prefer workspace match, fall back to most recent.
+        // Read files lazily starting from newest until we find a workspace match or exhaust all.
+        let fallback = null;
+        for (const { full } of candidates) {
+            let metrics;
+            try { metrics = JSON.parse(fs.readFileSync(full, 'utf8')); } catch { continue; }
+            if (!fallback) fallback = metrics;
+            if (metrics.cwd && workspacePaths.some(wp => metrics.cwd === wp || metrics.cwd.startsWith(wp + path.sep))) {
+                return metrics;
             }
         }
 
-        // Prefer metrics from a session in this workspace, fall back to most recent
-        const chosen = workspaceMatch || latest;
-        if (!chosen) return null;
-
-        const metrics = JSON.parse(fs.readFileSync(chosen, 'utf8'));
-
-        return metrics;
+        return fallback;
     } catch {
         return null;
     }
@@ -246,6 +243,7 @@ function updateStatusBar() {
     }
 
     const pct = metrics.used_percentage;
+
     let icon;
     if (pct >= 60) icon = '$(warning)';
     else if (pct >= 40) icon = '$(info)';
