@@ -12,7 +12,6 @@ const { execSync } = require('child_process');
 const BASE_DIR = process.env.COMPACT_GUARD_TMPDIR || os.tmpdir();
 const METRICS_DIR = path.join(BASE_DIR, 'claude-code-compact-guard');
 const USAGE_CACHE_FILE = path.join(METRICS_DIR, 'usage-cache.json');
-const USAGE_CACHE_TTL_MS = 300000; // Consider cache valid for 300s
 
 // Autocompact buffer (Claude Code reserves ~33K tokens for autocompact)
 const AUTOCOMPACT_BUFFER_TOKENS = 33_000;
@@ -23,8 +22,7 @@ const DANGER_TOKENS = 80_000;
 
 function readUsageCache() {
   try {
-    const cached = JSON.parse(fs.readFileSync(USAGE_CACHE_FILE, 'utf8'));
-    if (Date.now() - cached._fetchedAt < USAGE_CACHE_TTL_MS) return cached;
+    return JSON.parse(fs.readFileSync(USAGE_CACHE_FILE, 'utf8'));;
   } catch {}
   return null;
 }
