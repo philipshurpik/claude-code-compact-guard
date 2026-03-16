@@ -206,7 +206,7 @@ function readMetrics() {
             if (mtime > workspaceMatchMtime) {
                 try {
                     const m = JSON.parse(fs.readFileSync(full, 'utf8'));
-                    if (m.cwd && workspacePaths.some(wp => m.cwd.startsWith(wp))) {
+                    if (m.cwd && workspacePaths.some(wp => m.cwd === wp || m.cwd.startsWith(wp + path.sep))) {
                         workspaceMatch = full;
                         workspaceMatchMtime = mtime;
                     }

@@ -145,7 +145,7 @@ async function fetchUsage() {
   try {
     const usage = JSON.parse(result.body);
     usage._fetchedAt = Date.now();
-    try { fs.writeFileSync(USAGE_CACHE_FILE, JSON.stringify(usage, null, 2)); } catch {}
+    try { fs.writeFileSync(USAGE_CACHE_FILE, JSON.stringify(usage, null, 2), { mode: 0o600 }); } catch {}
     return usage;
   } catch { return readUsageCache(true) || null; }
 }
@@ -190,7 +190,7 @@ process.stdin.on('end', async () => {
 
     // Write session-scoped metrics file so multiple sessions don't conflict
     try { fs.mkdirSync(METRICS_DIR, { recursive: true }); } catch { /* exists */ }
-    const sessionId = data.session_id ?? 'unknown';
+    const sessionId = (data.session_id ?? 'unknown').replace(/[/\\]/g, '').replace(/\.\./g, '');
     const sessionMetricsFile = path.join(METRICS_DIR, `metrics-${sessionId}.json`);
     fs.writeFileSync(sessionMetricsFile, JSON.stringify(metrics, null, 2));
 

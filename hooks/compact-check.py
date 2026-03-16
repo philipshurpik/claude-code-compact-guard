@@ -27,9 +27,13 @@ AUTOCOMPACT_BUFFER_RATIO = 0.165
 CONTEXT_WINDOW_SIZE = 200000
 
 
+def sanitize_session_id(session_id: str) -> str:
+    return session_id.replace('/', '').replace('\\', '').replace('..', '')
+
+
 def read_metrics(session_id: str) -> dict | None:
     """Read metrics for a specific session."""
-    metrics_file = os.path.join(METRICS_DIR, f'metrics-{session_id}.json')
+    metrics_file = os.path.join(METRICS_DIR, f'metrics-{sanitize_session_id(session_id)}.json')
     try:
         with open(metrics_file) as f:
             return json.load(f)
@@ -89,7 +93,7 @@ def estimate_metrics_from_transcript(transcript_path: str, session_id: str) -> d
 def write_metrics(metrics: dict):
     """Write metrics file so the extension can read it."""
     os.makedirs(METRICS_DIR, exist_ok=True)
-    metrics_file = os.path.join(METRICS_DIR, f'metrics-{metrics["session_id"]}.json')
+    metrics_file = os.path.join(METRICS_DIR, f'metrics-{sanitize_session_id(metrics["session_id"])}.json')
     try:
         with open(metrics_file, 'w') as f:
             json.dump(metrics, f, indent=2)
@@ -98,7 +102,7 @@ def write_metrics(metrics: dict):
 
 
 def cooldown_file(session_id: str) -> str:
-    return os.path.join(METRICS_DIR, f'cooldown-{session_id}')
+    return os.path.join(METRICS_DIR, f'cooldown-{sanitize_session_id(session_id)}')
 
 
 def is_in_cooldown(session_id: str) -> bool:
@@ -145,7 +149,10 @@ def write_vscode_trigger(used_pct: int, tokens_used_k: int, window_k: int):
 
 
 def main():
-    input_data = json.load(sys.stdin)
+    try:
+        input_data = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        sys.exit(0)
 
     if input_data.get('stop_hook_active', False):
         sys.exit(0)
