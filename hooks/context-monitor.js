@@ -78,6 +78,19 @@ process.stdin.on('end', () => {
     try { fs.mkdirSync(METRICS_DIR, { recursive: true }); } catch { /* exists */ }
     const sessionId = (data.session_id ?? 'unknown').replace(/[/\\]/g, '').replace(/\.\./g, '');
     const sessionMetricsFile = path.join(METRICS_DIR, `metrics-${sessionId}.json`);
+
+    // Only update last_interaction_time when token counts change (real model response)
+    let lastInteractionTime = Date.now();
+    try {
+      const prev = JSON.parse(fs.readFileSync(sessionMetricsFile, 'utf8'));
+      if (prev.last_interaction_time
+          && prev.total_input_tokens === metrics.total_input_tokens
+          && prev.total_output_tokens === metrics.total_output_tokens) {
+        lastInteractionTime = prev.last_interaction_time;
+      }
+    } catch { /* no previous metrics */ }
+    metrics.last_interaction_time = lastInteractionTime;
+
     fs.writeFileSync(sessionMetricsFile, JSON.stringify(metrics, null, 2));
 
     // Color-coded status line output (based on absolute token count, not %)
@@ -122,8 +135,8 @@ process.stdin.on('end', () => {
       }
     }
 
-    const now = new Date();
-    const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const lastActive = new Date(lastInteractionTime);
+    const time = `${String(lastActive.getHours()).padStart(2, '0')}:${String(lastActive.getMinutes()).padStart(2, '0')}`;
 
     // Build output
     let output = `◆ ${modelName}`;
