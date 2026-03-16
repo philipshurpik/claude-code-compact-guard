@@ -172,6 +172,10 @@ function formatTimeAgo(timestampMs) {
     return `${hours}h ago`;
 }
 
+function getWorkspacePaths() {
+    return (vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath);
+}
+
 function readMetrics() {
     try {
         if (!fs.existsSync(METRICS_DIR)) return null;
@@ -180,8 +184,12 @@ function readMetrics() {
         if (files.length === 0) return null;
 
         const now = Date.now();
+        const workspacePaths = getWorkspacePaths();
         let latest = null;
         let latestMtime = 0;
+        let workspaceMatch = null;
+        let workspaceMatchMtime = 0;
+
         for (const file of files) {
             const full = path.join(METRICS_DIR, file);
             const mtime = fs.statSync(full).mtimeMs;
@@ -194,10 +202,23 @@ function readMetrics() {
                 latestMtime = mtime;
                 latest = full;
             }
+            // Track best workspace-matching file separately
+            if (mtime > workspaceMatchMtime) {
+                try {
+                    const m = JSON.parse(fs.readFileSync(full, 'utf8'));
+                    if (m.cwd && workspacePaths.some(wp => m.cwd.startsWith(wp))) {
+                        workspaceMatch = full;
+                        workspaceMatchMtime = mtime;
+                    }
+                } catch { /* ignore parse errors */ }
+            }
         }
-        if (!latest) return null;
 
-        const metrics = JSON.parse(fs.readFileSync(latest, 'utf8'));
+        // Prefer metrics from a session in this workspace, fall back to most recent
+        const chosen = workspaceMatch || latest;
+        if (!chosen) return null;
+
+        const metrics = JSON.parse(fs.readFileSync(chosen, 'utf8'));
 
         // Ignore stale metrics (older than 5 minutes — no active session)
         if (metrics.timestamp && (now - metrics.timestamp) > 300000) return null;
