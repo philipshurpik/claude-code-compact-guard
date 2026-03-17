@@ -29,10 +29,11 @@ def model_context_window(model_id: str) -> int:
     if m:
         raw = int(m.group(1)) * 1_000_000
     elif 'opus' in model_id:
-        raw = 1_000_000         # the only way to reliably get window - is by model name
+        raw = 1_000_000  # the only way to reliably get window - is by model name
     else:
         raw = 200_000
     return raw - AUTOCOMPACT_BUFFER_TOKENS
+
 
 # Cooldown: don't nag more than once per N seconds
 COOLDOWN_SECONDS = 200
