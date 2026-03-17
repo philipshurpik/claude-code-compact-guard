@@ -17,6 +17,24 @@ import urllib.request
 # When total input tokens exceed this, the hook blocks Claude and asks user to /compact.
 COMPACT_THRESHOLD_TOKENS = 80_000
 
+# Autocompact buffer constant reserved by Claude Code (same value as in context-monitor.js)
+AUTOCOMPACT_BUFFER_TOKENS = 33_000
+
+_CONTEXT_SUFFIX_RE = re.compile(r'\[(\d+)m\]$')
+
+
+def model_context_window(model_id: str) -> int:
+    """Return effective context window (raw - autocompact buffer) for a given model ID."""
+    m = _CONTEXT_SUFFIX_RE.search(model_id)
+    if m:
+        raw = int(m.group(1)) * 1_000_000
+    elif 'opus' in model_id:
+        raw = 1_000_000  # the only way to reliably get window - is by model name
+    else:
+        raw = 200_000
+    return raw - AUTOCOMPACT_BUFFER_TOKENS
+
+
 # Cooldown: don't nag more than once per N seconds
 COOLDOWN_SECONDS = 200
 
@@ -65,6 +83,7 @@ def estimate_metrics_from_transcript(transcript_path: str, session_id: str, cwd:
 
         last_usage = None
         total_output = 0
+        model_id = ''
 
         for entry in entries:
             if entry.get('type') == 'assistant' and 'message' in entry:
@@ -72,6 +91,7 @@ def estimate_metrics_from_transcript(transcript_path: str, session_id: str, cwd:
                 if 'usage' in msg:
                     last_usage = msg['usage']
                     total_output += last_usage.get('output_tokens', 0)
+                    model_id = model_id or msg.get('model', '')
 
         if not last_usage:
             return None
@@ -88,6 +108,7 @@ def estimate_metrics_from_transcript(transcript_path: str, session_id: str, cwd:
             'cache_read_input_tokens': cache_read,
             'cache_creation_input_tokens': cache_creation,
             'session_id': session_id,
+            'model_id': model_id,
             'cwd': cwd,
         }
     except Exception:
@@ -368,13 +389,15 @@ def main():
     cached_metrics = read_metrics(session_id)
 
     if transcript_metrics:
-        # Fill in window size + used_pct from cached metrics (context-monitor.js wrote the real value).
-        window_size = (cached_metrics or {}).get('context_window_size', 0)
+        # Fill in window size + used_pct. Prefer the real value from context-monitor.js (StatusLine hook),
+        # fall back to model-based lookup when StatusLine hook isn't available (VS Code extension mode).
+        model_id = transcript_metrics.get('model_id', '') or (cached_metrics or {}).get('model_id', '')
+        cached_window = (cached_metrics or {}).get('context_window_size') or 0
+        window_size = cached_window or model_context_window(model_id)
+        total = transcript_metrics['total_input_tokens']
         transcript_metrics['context_window_size'] = window_size
-        if window_size:
-            total = transcript_metrics['total_input_tokens']
-            transcript_metrics['used_percentage'] = min(100, round(total / window_size * 100))
-            transcript_metrics['remaining_percentage'] = 100 - transcript_metrics['used_percentage']
+        transcript_metrics['used_percentage'] = min(100, round(total / window_size * 100))
+        transcript_metrics['remaining_percentage'] = 100 - transcript_metrics['used_percentage']
         metrics = transcript_metrics
     elif cached_metrics:
         metrics = cached_metrics
