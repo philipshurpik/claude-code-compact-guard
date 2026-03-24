@@ -140,14 +140,16 @@ process.stdin.on('end', () => {
     output += ` │ ◷ ${time}`;
     output += ` │ ${bar} ${usedPct}% (${tokensK}K/${windowK}K)`;
     if (sessionUsagePct != null) {
+      const rlColor = sessionUsagePct > 80 ? '\x1b[31m' : sessionUsagePct > 50 ? '\x1b[33m' : '\x1b[32m';
       const resetStr = formatReset(sessionResetsAt);
-      output += ` │ 5h ${sessionUsagePct}%`;
-      if (resetStr) output += ` ${resetStr}`;
+      output += ` │ ${rlColor}${sessionUsagePct}%${reset}`;
+      if (resetStr) output += ` ${dimColor}↻${resetStr}${reset}`;
     }
     if (weeklyUsagePct != null) {
+      const rlColor = weeklyUsagePct > 80 ? '\x1b[31m' : weeklyUsagePct > 50 ? '\x1b[33m' : '\x1b[32m';
       const resetStr = formatReset(weeklyResetsAt);
-      output += ` │ 7d ${weeklyUsagePct}%`;
-      if (resetStr) output += ` ${resetStr}`;
+      output += ` │ ${rlColor}${weeklyUsagePct}%${reset}`;
+      if (resetStr) output += ` ${dimColor}⟳${resetStr}${reset}`;
     }
 
     process.stdout.write(output);

@@ -215,8 +215,10 @@ describe('status line output', () => {
             },
         });
         const output = runHook(input, tmpDir);
-        assert.ok(output.includes('5h 42%'), 'expected 5h usage');
-        assert.ok(output.includes('7d 15%'), 'expected 7d usage');
+        assert.ok(output.includes('42%'), 'expected session usage');
+        assert.ok(output.includes('15%'), 'expected weekly usage');
+        assert.ok(output.includes('↻'), 'expected session reset icon');
+        assert.ok(output.includes('⟳'), 'expected weekly reset icon');
     });
 
     it('displays reset time for rate_limits', () => {

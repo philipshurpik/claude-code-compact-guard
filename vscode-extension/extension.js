@@ -9,6 +9,7 @@ const METRICS_DIR = path.join(BASE_DIR, 'claude-code-compact-guard');
 const HEARTBEAT_FILE = path.join(BASE_DIR, 'claude-code-compact-guard-active');
 
 const COOLDOWN_MS = 200000; // Don't show compaction dialog more than once per 200s
+const CACHE_TTL_SECONDS = 300; // Prompt cache expires after ~5 minutes of inactivity
 
 let watcher = null;
 let statusBarItem = null;
@@ -264,10 +265,25 @@ function updateStatusBar() {
     else if (pct >= 40) icon = '$(info)';
     else icon = '$(check)';
 
+    // Cache countdown: time remaining until prompt cache expires
+    let cachePart = '';
+    if (metrics.last_interaction_time) {
+        const elapsed = Math.floor((Date.now() - metrics.last_interaction_time) / 1000);
+        const remaining = CACHE_TTL_SECONDS - elapsed;
+        if (remaining > 0) {
+            const m = Math.floor(remaining / 60);
+            const s = remaining % 60;
+            cachePart = ` | $${m}:${String(s).padStart(2, '0')}`;
+        } else {
+            cachePart = ' | $expired';
+        }
+    }
+
     const sessionPart = metrics.session_usage_pct != null ? ` | S: ${metrics.session_usage_pct}%` : '';
-    statusBarItem.text = `${icon} Ctx: ${pct}%${sessionPart}`;
+    statusBarItem.text = `${icon} Ctx: ${pct}%${cachePart}${sessionPart}`;
 
     const tooltipParts = [`Context: ${pct}%`];
+    if (cachePart) tooltipParts.push(cachePart.includes('expired') ? 'Cache: expired' : `Cache: ${cachePart.slice(4)} remaining`);
     if (metrics.session_usage_pct != null) {
         const resetsIn = formatResetsIn(metrics.session_resets_at);
         tooltipParts.push(`Session: ${metrics.session_usage_pct}%${resetsIn ? ` (resets in ${resetsIn})` : ''}`);
