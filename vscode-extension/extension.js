@@ -23,8 +23,8 @@ function activate(context) {
     statusBarItem.tooltip = 'Claude Code context usage (Compact Guard)';
     context.subscriptions.push(statusBarItem);
 
-    // Start polling metrics for status bar (every 3s)
-    const metricsInterval = setInterval(() => updateStatusBar(), 3000);
+    // Start polling metrics for status bar (every 10s)
+    const metricsInterval = setInterval(() => updateStatusBar(), 10000);
     context.subscriptions.push({ dispose: () => clearInterval(metricsInterval) });
     updateStatusBar();
 
@@ -260,10 +260,8 @@ function updateStatusBar() {
 
     const pct = metrics.used_percentage;
 
-    let icon;
-    if (pct >= 60) icon = '$(warning)';
-    else if (pct >= 40) icon = '$(info)';
-    else icon = '$(check)';
+    const level = metrics.level || 'ok';
+    const icon = level === 'danger' ? '$(error)' : level === 'warn' ? '$(warning)' : '$(check)';
 
     // Cache countdown: time remaining until prompt cache expires
     let cachePart = '';
@@ -273,14 +271,14 @@ function updateStatusBar() {
         if (remaining > 0) {
             const m = Math.floor(remaining / 60);
             const s = remaining % 60;
-            cachePart = ` | $${m}:${String(s).padStart(2, '0')}`;
+            cachePart = ` | $(clock) ${m}:${String(s).padStart(2, '0')}`;
         } else {
-            cachePart = ' | $expired';
+            cachePart = ' | $(clock) expired';
         }
     }
 
-    const sessionPart = metrics.session_usage_pct != null ? ` | S: ${metrics.session_usage_pct}%` : '';
-    statusBarItem.text = `${icon} Ctx: ${pct}%${cachePart}${sessionPart}`;
+    const sessionPart = metrics.session_usage_pct != null ? ` | $(graph-line) ${metrics.session_usage_pct}%` : '';
+    statusBarItem.text = `$(dashboard) ${icon} ${pct}%${cachePart}${sessionPart}`;
 
     const tooltipParts = [`Context: ${pct}%`];
     if (cachePart) tooltipParts.push(cachePart.includes('expired') ? 'Cache: expired' : `Cache: ${cachePart.slice(4)} remaining`);

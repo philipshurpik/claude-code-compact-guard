@@ -159,9 +159,13 @@ def main():
     cached_metrics = read_metrics(session_id)
 
     if transcript_metrics:
-        # Fill in window size + used_pct from cached metrics (context-monitor.js wrote the real value).
-        window_size = (cached_metrics or {}).get('context_window_size', 0)
-        transcript_metrics['context_window_size'] = window_size
+        # Fill in fields from cached metrics (context-monitor.js wrote the real values).
+        cached = cached_metrics or {}
+        for key in ('context_window_size', 'level', 'last_interaction_time', 'model_id',
+                     'session_usage_pct', 'session_resets_at', 'weekly_usage_pct', 'weekly_resets_at'):
+            if key in cached and key not in transcript_metrics:
+                transcript_metrics[key] = cached[key]
+        window_size = transcript_metrics.get('context_window_size', 0)
         if window_size:
             total = transcript_metrics['total_input_tokens']
             transcript_metrics['used_percentage'] = min(100, round(total / window_size * 100))
