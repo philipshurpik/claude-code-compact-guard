@@ -15,7 +15,7 @@ const AUTOCOMPACT_BUFFER_TOKENS = 33_000;
 
 // Thresholds for status line color coding (absolute tokens, model-agnostic)
 const WARN_TOKENS = 60_000;
-const DANGER_TOKENS = 80_000;
+const DANGER_TOKENS = 100_000;
 
 function formatReset(epoch) {
   if (!epoch) return '';
@@ -58,9 +58,13 @@ process.stdin.on('end', () => {
     const weeklyUsagePct = rlSevenDay?.used_percentage != null ? Math.round(rlSevenDay.used_percentage) : null;
     const weeklyResetsAt = rlSevenDay?.resets_at ?? null;
 
+    // Determine usage level based on absolute token thresholds (using tokensUsed which matches the displayed value)
+    const level = tokensUsed >= DANGER_TOKENS ? 'danger' : tokensUsed >= WARN_TOKENS ? 'warn' : 'ok';
+
     // Write metrics for the Stop hook to read
     const metrics = {
       timestamp: Date.now(),
+      level,
       used_percentage: usedPct,
       remaining_percentage: 100 - usedPct,
       context_window_size: effectiveWindow,
@@ -96,16 +100,8 @@ process.stdin.on('end', () => {
 
     fs.writeFileSync(sessionMetricsFile, JSON.stringify(metrics, null, 2));
 
-    // Color-coded status line output (based on absolute token count, not %)
-    const inputTokens = ctx.total_input_tokens ?? tokensUsed;
-    let color;
-    if (inputTokens >= DANGER_TOKENS) {
-      color = '\x1b[38;5;208m'; // orange
-    } else if (inputTokens >= WARN_TOKENS) {
-      color = '\x1b[33m'; // yellow
-    } else {
-      color = '\x1b[32m'; // green
-    }
+    // Color-coded status line output
+    const color = level === 'danger' ? '\x1b[38;5;208m' : level === 'warn' ? '\x1b[33m' : '\x1b[32m';
     const reset = '\x1b[0m';
     const dimColor = '\x1b[38;5;238m';
     const mutedColor = '\x1b[38;5;245m';

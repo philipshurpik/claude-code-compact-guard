@@ -178,7 +178,7 @@ describe('status line output', () => {
 
     it('outputs yellow bar at warning level (60K-80K tokens)', () => {
         const input = makeInput({
-            context_window: { ...makeInput().context_window, total_input_tokens: 65_000 },
+            context_window: { ...makeInput().context_window, used_percentage: 35, total_input_tokens: 70_000 },
         });
         const output = runHook(input, tmpDir);
         assert.ok(output.includes('\x1b[33m'), 'expected yellow ANSI code');
@@ -186,7 +186,7 @@ describe('status line output', () => {
 
     it('outputs orange bar at danger level (>=80K tokens)', () => {
         const input = makeInput({
-            context_window: { ...makeInput().context_window, total_input_tokens: 85_000 },
+            context_window: { ...makeInput().context_window, used_percentage: 45, total_input_tokens: 90_000 },
         });
         const output = runHook(input, tmpDir);
         assert.ok(output.includes('\x1b[38;5;208m'), 'expected orange ANSI code');
