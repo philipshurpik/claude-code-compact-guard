@@ -206,4 +206,60 @@ describe('status line output', () => {
         });
         assert.strictEqual(output, 'Ctx: --');
     });
+
+    it('displays rate_limits from live data', () => {
+        const input = makeInput({
+            rate_limits: {
+                five_hour: { used_percentage: 42, resets_at: Math.floor(Date.now() / 1000) + 7200 },
+                seven_day: { used_percentage: 15, resets_at: Math.floor(Date.now() / 1000) + 86400 },
+            },
+        });
+        const output = runHook(input, tmpDir);
+        assert.ok(output.includes('5h 42%'), 'expected 5h usage');
+        assert.ok(output.includes('7d 15%'), 'expected 7d usage');
+    });
+
+    it('displays reset time for rate_limits', () => {
+        const input = makeInput({
+            rate_limits: {
+                five_hour: { used_percentage: 50, resets_at: Math.floor(Date.now() / 1000) + 3661 },
+                seven_day: { used_percentage: 10, resets_at: Math.floor(Date.now() / 1000) + 90000 },
+            },
+        });
+        const output = runHook(input, tmpDir);
+        assert.ok(output.includes('1h1m') || output.includes('1h0m'), 'expected 5h reset time ~1h');
+        assert.ok(output.includes('1d1h') || output.includes('1d0h'), 'expected 7d reset time ~1d');
+    });
+});
+
+
+describe('rate_limits in metrics', () => {
+    let tmpDir;
+
+    before(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-test-'));
+    });
+
+    after(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('writes rate_limits to metrics when present', () => {
+        const resetEpoch = Math.floor(Date.now() / 1000) + 3600;
+        const input = makeInput({
+            session_id: 'rl-test',
+            rate_limits: {
+                five_hour: { used_percentage: 42.7, resets_at: resetEpoch },
+                seven_day: { used_percentage: 15.3, resets_at: resetEpoch + 86400 },
+            },
+        });
+        runHook(input, tmpDir);
+
+        const file = path.join(tmpDir, 'claude-code-compact-guard', 'metrics-rl-test.json');
+        const metrics = JSON.parse(fs.readFileSync(file, 'utf8'));
+        assert.strictEqual(metrics.session_usage_pct, 43);
+        assert.strictEqual(metrics.weekly_usage_pct, 15);
+        assert.strictEqual(metrics.session_resets_at, resetEpoch);
+        assert.strictEqual(metrics.weekly_resets_at, resetEpoch + 86400);
+    });
 });

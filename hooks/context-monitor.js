@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 
 // StatusLine hook: monitors context usage and writes metrics to a temp file.
-// This is the ONLY hook type that receives live context_window data.
-// Usage quota is fetched by compact-check.py (Stop hook) — we only read the cache here.
 
 const fs = require('fs');
 const path = require('path');
@@ -11,7 +9,6 @@ const { execSync } = require('child_process');
 
 const BASE_DIR = process.env.COMPACT_GUARD_TMPDIR || os.tmpdir();
 const METRICS_DIR = path.join(BASE_DIR, 'claude-code-compact-guard');
-const USAGE_CACHE_FILE = path.join(METRICS_DIR, 'usage-cache.json');
 
 // Autocompact buffer (Claude Code reserves ~33K tokens for autocompact)
 const AUTOCOMPACT_BUFFER_TOKENS = 33_000;
@@ -20,11 +17,17 @@ const AUTOCOMPACT_BUFFER_TOKENS = 33_000;
 const WARN_TOKENS = 60_000;
 const DANGER_TOKENS = 80_000;
 
-function readUsageCache() {
-  try {
-    return JSON.parse(fs.readFileSync(USAGE_CACHE_FILE, 'utf8'));;
-  } catch {}
-  return null;
+function formatReset(epoch) {
+  if (!epoch) return '';
+  const diff = Math.max(0, Math.round(epoch - Date.now() / 1000));
+  if (diff <= 0) return 'now';
+  if (diff < 60) return '<1m';
+  const d = Math.floor(diff / 86400);
+  const h = Math.floor((diff % 86400) / 3600);
+  const m = Math.floor((diff % 3600) / 60);
+  if (d > 0) return `${d}d${h}h`;
+  if (h > 0) return `${h}h${m}m`;
+  return `${m}m`;
 }
 
 let input = '';
@@ -46,13 +49,14 @@ process.stdin.on('end', () => {
     const tokensUsed = Math.round((rawUsedPct / 100) * windowSize);
     const usedPct = Math.min(100, Math.round((tokensUsed / effectiveWindow) * 100));
 
-    // Read usage quota from cache (written by compact-check.py Stop hook)
-    const usage = readUsageCache();
-    const fiveHour = usage?.five_hour;
-    const sevenDay = usage?.seven_day;
-    const sessionUsagePct = fiveHour ? Math.round(fiveHour.utilization) : null;
-    const sessionResetsAt = fiveHour?.resets_at ?? null;
-    const weeklyUsagePct = sevenDay ? Math.round(sevenDay.utilization) : null;
+    // Rate limits from Claude Code 2.1.80+
+    const rateLimits = data.rate_limits || {};
+    const rlFiveHour = rateLimits.five_hour;
+    const rlSevenDay = rateLimits.seven_day;
+    const sessionUsagePct = rlFiveHour?.used_percentage != null ? Math.round(rlFiveHour.used_percentage) : null;
+    const sessionResetsAt = rlFiveHour?.resets_at ?? null;
+    const weeklyUsagePct = rlSevenDay?.used_percentage != null ? Math.round(rlSevenDay.used_percentage) : null;
+    const weeklyResetsAt = rlSevenDay?.resets_at ?? null;
 
     // Write metrics for the Stop hook to read
     const metrics = {
@@ -67,6 +71,7 @@ process.stdin.on('end', () => {
       session_usage_pct: sessionUsagePct,
       session_resets_at: sessionResetsAt,
       weekly_usage_pct: weeklyUsagePct,
+      weekly_resets_at: weeklyResetsAt,
       model_id: model.id ?? 'unknown',
       session_id: data.session_id ?? '',
       cwd: cwd,
@@ -142,7 +147,16 @@ process.stdin.on('end', () => {
     if (branch) output += ` │ ⎇ ${branch}`;
     output += ` │ ◷ ${time}`;
     output += ` │ ${bar} ${usedPct}% (${tokensK}K/${windowK}K)`;
-    if (sessionUsagePct != null) output += ` │ ⚡ ${sessionUsagePct}%`;
+    if (sessionUsagePct != null) {
+      const resetStr = formatReset(sessionResetsAt);
+      output += ` │ 5h ${sessionUsagePct}%`;
+      if (resetStr) output += ` ${resetStr}`;
+    }
+    if (weeklyUsagePct != null) {
+      const resetStr = formatReset(weeklyResetsAt);
+      output += ` │ 7d ${weeklyUsagePct}%`;
+      if (resetStr) output += ` ${resetStr}`;
+    }
 
     process.stdout.write(output);
   } catch {
