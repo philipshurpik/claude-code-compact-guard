@@ -108,6 +108,7 @@ process.stdin.on('end', () => {
     }
     const reset = '\x1b[0m';
     const dimColor = '\x1b[38;5;238m';
+    const mutedColor = '\x1b[38;5;245m';
 
     const modelName = model.display_name ?? 'Claude';
 
@@ -143,13 +144,13 @@ process.stdin.on('end', () => {
       const rlColor = sessionUsagePct > 80 ? '\x1b[31m' : sessionUsagePct > 50 ? '\x1b[33m' : '\x1b[32m';
       const resetStr = formatReset(sessionResetsAt);
       output += ` │ ${rlColor}${sessionUsagePct}%${reset}`;
-      if (resetStr) output += ` ${dimColor}↻${resetStr}${reset}`;
+      if (resetStr) output += ` ${mutedColor}↻${resetStr}${reset}`;
     }
     if (weeklyUsagePct != null) {
       const rlColor = weeklyUsagePct > 80 ? '\x1b[31m' : weeklyUsagePct > 50 ? '\x1b[33m' : '\x1b[32m';
       const resetStr = formatReset(weeklyResetsAt);
       output += ` │ ${rlColor}${weeklyUsagePct}%${reset}`;
-      if (resetStr) output += ` ${dimColor}⟳${resetStr}${reset}`;
+      if (resetStr) output += ` ${mutedColor}⟳${resetStr}${reset}`;
     }
 
     process.stdout.write(output);
