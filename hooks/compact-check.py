@@ -125,11 +125,6 @@ def is_extension_active() -> bool:
         return False
 
 
-def should_extension_handle() -> bool:
-    """Extension handles if it's alive — heartbeat is the reliable signal."""
-    return is_extension_active()
-
-
 def write_vscode_trigger(used_pct: int, tokens_used_k: int, window_k: int):
     """Write trigger file for VS Code / Cursor extension dialog."""
     trigger = {
@@ -200,7 +195,7 @@ def main():
 
     write_vscode_trigger(used_pct, tokens_used_k, window_k)
 
-    if should_extension_handle():
+    if is_extension_active():
         # Session is inside VS Code/Cursor and extension is active.
         # Extension will show the dialog -- no need to block Claude.
         sys.exit(0)

@@ -124,19 +124,11 @@ process.stdin.on('end', () => {
     const windowK = (effectiveWindow / 1000).toFixed(0);
 
     // Build graphical progress bar (10 segments)
-    const barWidth = 10;
-    let bar = '';
-    for (let i = 0; i < barWidth; i++) {
-      const segStart = i * 10;
-      const progress = usedPct - segStart;
-      if (progress >= 8) {
-        bar += `${color}█${reset}`;
-      } else if (progress >= 3) {
-        bar += `${color}▄${reset}`;
-      } else {
-        bar += `${dimColor}░${reset}`;
-      }
-    }
+    const bar = Array.from({ length: 10 }, (_, i) => {
+      const progress = usedPct - i * 10;
+      const ch = progress >= 8 ? '█' : progress >= 3 ? '▄' : null;
+      return ch ? `${color}${ch}${reset}` : `${dimColor}░${reset}`;
+    }).join('');
 
     const lastActive = new Date(lastInteractionTime);
     const time = `${String(lastActive.getHours()).padStart(2, '0')}:${String(lastActive.getMinutes()).padStart(2, '0')}`;

@@ -6,6 +6,8 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 HOOK = os.path.join(os.path.dirname(__file__), '..', 'hooks', 'compact-check.py')
 
 
@@ -134,29 +136,8 @@ class TestCooldown:
 
 
 class TestEditorDetection:
-    def test_extension_in_vscode_skips_block(self, tmp_path):
-        write_metrics(tmp_path, 'sess-1', tokens=90_000)
-        (tmp_path / 'claude-code-compact-guard-active').write_text(str(time.time()))
-
-        result = run_hook(
-            tmp_path,
-            {'session_id': 'sess-1'},
-            env_extra={'TERM_PROGRAM': 'vscode'},
-        )
-        assert parse_output(result) is None
-
-    def test_extension_in_cursor_skips_block(self, tmp_path):
-        write_metrics(tmp_path, 'sess-1', tokens=90_000)
-        (tmp_path / 'claude-code-compact-guard-active').write_text(str(time.time()))
-
-        result = run_hook(
-            tmp_path,
-            {'session_id': 'sess-1'},
-            env_extra={'TERM_PROGRAM': 'cursor'},
-        )
-        assert parse_output(result) is None
-
-    def test_active_heartbeat_delegates_regardless_of_terminal(self, tmp_path):
+    @pytest.mark.parametrize('term_program', ['vscode', 'cursor', 'iTerm2'])
+    def test_active_heartbeat_delegates_regardless_of_terminal(self, tmp_path, term_program):
         """Extension heartbeat alone is enough to delegate — TERM_PROGRAM doesn't matter."""
         write_metrics(tmp_path, 'sess-1', tokens=90_000)
         (tmp_path / 'claude-code-compact-guard-active').write_text(str(time.time()))
@@ -164,7 +145,7 @@ class TestEditorDetection:
         result = run_hook(
             tmp_path,
             {'session_id': 'sess-1'},
-            env_extra={'TERM_PROGRAM': 'iTerm2'},
+            env_extra={'TERM_PROGRAM': term_program},
         )
         assert parse_output(result) is None
 
