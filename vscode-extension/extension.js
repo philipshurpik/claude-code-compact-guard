@@ -20,8 +20,8 @@ function activate(context) {
     statusBarItem.tooltip = 'Claude Code context usage (Compact Guard)';
     context.subscriptions.push(statusBarItem);
 
-    // Start polling metrics for status bar (every 10s)
-    const metricsInterval = setInterval(() => updateStatusBar(), 10000);
+    // Poll every 3s for heartbeat + status bar update
+    const metricsInterval = setInterval(() => updateStatusBar(), 3000);
     context.subscriptions.push({ dispose: () => clearInterval(metricsInterval) });
     updateStatusBar();
 
@@ -221,8 +221,11 @@ function updateStatusBar() {
         const elapsed = Math.floor((Date.now() - metrics.last_interaction_time) / 1000);
         const remaining = CACHE_TTL_SECONDS - elapsed;
         if (remaining > 0) {
-            const m = Math.floor(remaining / 60);
-            const s = remaining % 60;
+            // Round down to nearest 10s to avoid visual jitter (2:59→2:50, 2:07→2:00)
+            const rounded = Math.floor(remaining / 10) * 10;
+            const display = Math.max(rounded, 0);
+            const m = Math.floor(display / 60);
+            const s = display % 60;
             cachePart = ` | $(clock) ${m}:${String(s).padStart(2, '0')}`;
         } else {
             cachePart = ' | $(clock) expired';

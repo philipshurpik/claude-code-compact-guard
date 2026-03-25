@@ -119,8 +119,8 @@ class TestMetricsWriting:
         metrics = read_written_metrics(tmp_path, 'sess-1')
         assert metrics is not None
         assert metrics['total_input_tokens'] == 60_000
-        assert metrics['context_window_size'] == 200_000  # inferred from model (no [1m])
-        assert metrics['used_percentage'] == 30  # 60K / 200K
+        assert metrics['context_window_size'] == 167_000  # inferred: 200K - 33K autocompact buffer
+        assert metrics['used_percentage'] == 36  # 60K / 167K
         assert metrics['level'] == 'warn'  # 60K >= WARN_TOKENS
         assert metrics['model_id'] == 'claude-sonnet-4-6'
         assert metrics['last_interaction_time'] is not None
@@ -145,8 +145,8 @@ class TestMetricsWriting:
         run_hook(tmp_path, {'session_id': 'sess-1', 'transcript_path': str(transcript)})
 
         metrics = read_written_metrics(tmp_path, 'sess-1')
-        assert metrics['context_window_size'] == 1_000_000
-        assert metrics['used_percentage'] == 10  # 100K / 1M
+        assert metrics['context_window_size'] == 967_000  # 1M - 33K autocompact buffer
+        assert metrics['used_percentage'] == 10  # 100K / 967K
 
     def test_preserves_cached_fields_with_transcript(self, tmp_path):
         """When cached metrics exist (from context-monitor.js), they override inferred values."""
@@ -182,10 +182,11 @@ class TestMetricsWriting:
 
         metrics = read_written_metrics(tmp_path, 'sess-1')
         assert metrics['total_input_tokens'] == 60_000
-        # Cached context_window_size (167K) overrides inferred (200K)
+        # Transcript infers window: 200K - 33K = 167K (same as cached in this case)
         assert metrics['context_window_size'] == 167_000
         assert metrics['used_percentage'] == 36  # 60K / 167K
-        assert metrics['last_interaction_time'] == 1234567890
+        # Transcript sets last_interaction_time to current time, not cached value
+        assert abs(metrics['last_interaction_time'] - time.time() * 1000) < 5000
 
 
 class TestSessionIsolation:

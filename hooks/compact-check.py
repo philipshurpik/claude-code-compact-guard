@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
 """Stop hook: writes metrics for the extension to read."""
 
+import functools
 import json
 import os
+import re
+import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 
 WARN_TOKENS = 60_000
 COMPACT_TOKENS = 80_000
 AUTOCOMPACT_BUFFER_TOKENS = 33_000
+USAGE_CACHE_TTL = 300
 
 _TMPDIR = os.environ.get('COMPACT_GUARD_TMPDIR', tempfile.gettempdir())
 METRICS_DIR = os.path.join(_TMPDIR, 'claude-code-compact-guard')
+USAGE_CACHE_FILE = os.path.join(METRICS_DIR, 'usage-cache.json')
+
+OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
+KEYCHAIN_SERVICE = 'Claude Code-credentials'
 
 
 def infer_context_window(model_id: str) -> int:
@@ -104,6 +114,94 @@ def write_metrics(metrics: dict):
         pass
 
 
+def _get_credentials() -> dict | None:
+    try:
+        raw = subprocess.check_output(
+            ['security', 'find-generic-password', '-s', KEYCHAIN_SERVICE, '-w'],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+@functools.lru_cache(maxsize=1)
+def _get_claude_code_version() -> str:
+    try:
+        out = subprocess.check_output(['claude', '--version'], stderr=subprocess.DEVNULL, text=True).strip()
+        m = re.search(r'[\d.]+', out)
+        return m.group(0) if m else 'unknown'
+    except Exception:
+        return 'unknown'
+
+
+def _read_usage_cache() -> dict | None:
+    try:
+        with open(USAGE_CACHE_FILE) as f:
+            cached = json.load(f)
+        if (time.time() - cached.get('_fetchedAt', 0) / 1000) < USAGE_CACHE_TTL:
+            return cached
+    except Exception:
+        pass
+    return None
+
+
+def _write_usage_cache(usage: dict):
+    os.makedirs(METRICS_DIR, exist_ok=True)
+    usage['_fetchedAt'] = int(time.time() * 1000)
+    try:
+        with open(USAGE_CACHE_FILE, 'w') as f:
+            json.dump(usage, f, indent=2)
+        os.chmod(USAGE_CACHE_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def fetch_usage() -> dict | None:
+    """Fetch session/weekly usage from OAuth API with 300s caching. Returns parsed API response or None."""
+    cached = _read_usage_cache()
+    if cached:
+        return cached
+
+    token = (_get_credentials() or {}).get('claudeAiOauth', {}).get('accessToken')
+    if not token:
+        return None
+
+    req = urllib.request.Request(
+        'https://api.anthropic.com/api/oauth/usage',
+        headers={
+            'Authorization': f'Bearer {token}',
+            'anthropic-beta': 'oauth-2025-04-20',
+            'User-Agent': f'claude-code/{_get_claude_code_version()}',
+            'Accept': 'application/json',
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            usage = json.loads(resp.read())
+        _write_usage_cache(usage)
+        return usage
+    except Exception:
+        return None
+
+
+def _extract_usage_metrics(usage: dict) -> dict:
+    """Extract session and weekly usage percentages and reset times from API response."""
+    result = {}
+    five_hour = usage.get('five_hour')
+    if five_hour:
+        result['session_usage_pct'] = round(five_hour['utilization'])
+        if five_hour.get('resets_at'):
+            result['session_resets_at'] = five_hour['resets_at']
+    weekly = usage.get('weekly')
+    if weekly:
+        result['weekly_usage_pct'] = round(weekly['utilization'])
+        if weekly.get('resets_at'):
+            result['weekly_resets_at'] = weekly['resets_at']
+    return result
+
+
 def main():
     try:
         input_data = json.load(sys.stdin)
@@ -132,6 +230,11 @@ def main():
         metrics = cached_metrics
     else:
         sys.exit(0)
+
+    # Fetch session/weekly usage from OAuth API (cached for 300s)
+    usage = fetch_usage()
+    if usage:
+        metrics.update(_extract_usage_metrics(usage))
 
     if cwd and not metrics.get('cwd'):
         metrics['cwd'] = cwd
