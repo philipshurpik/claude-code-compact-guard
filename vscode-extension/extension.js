@@ -4,16 +4,13 @@ const path = require('path');
 const os = require('os');
 
 const BASE_DIR = process.env.COMPACT_GUARD_TMPDIR || os.tmpdir();
-const TRIGGER_FILE = path.join(BASE_DIR, 'claude-code-compact-guard-trigger.json');
 const METRICS_DIR = path.join(BASE_DIR, 'claude-code-compact-guard');
 const HEARTBEAT_FILE = path.join(BASE_DIR, 'claude-code-compact-guard-active');
 
 const COOLDOWN_MS = 200000; // Don't show compaction dialog more than once per 200s
-const CACHE_TTL_SECONDS = 300; // Prompt cache expires after ~5 minutes of inactivity
-
-let watcher = null;
+const CACHE_TTL_SECONDS = 240; // Prompt cache expires after ~4 minutes of inactivity
+const CACHE_WARN_SECONDS = 90; // Show compact dialog when this much cache time remains
 let statusBarItem = null;
-let debounceTimer = null;
 let lastTriggerTime = 0;
 
 function activate(context) {
@@ -27,10 +24,6 @@ function activate(context) {
     const metricsInterval = setInterval(() => updateStatusBar(), 10000);
     context.subscriptions.push({ dispose: () => clearInterval(metricsInterval) });
     updateStatusBar();
-
-    // Watch trigger file for compaction prompts
-    ensureTriggerDir();
-    startWatching(context);
 
     // Command: send /compact to Claude terminal
     context.subscriptions.push(
@@ -61,80 +54,6 @@ function activate(context) {
             );
         })
     );
-}
-
-function ensureTriggerDir() {
-    const dir = path.dirname(TRIGGER_FILE);
-    if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-    }
-}
-
-function startWatching(context) {
-    // Create trigger file if it doesn't exist so we can watch it
-    if (!fs.existsSync(TRIGGER_FILE)) {
-        fs.writeFileSync(TRIGGER_FILE, '{}');
-    }
-
-    try {
-        watcher = fs.watch(TRIGGER_FILE, (eventType) => {
-            if (eventType === 'change' || eventType === 'rename') {
-                // Debounce: fs.watch can fire multiple events for a single write
-                if (debounceTimer) clearTimeout(debounceTimer);
-                debounceTimer = setTimeout(() => handleTrigger(), 300);
-            }
-        });
-        context.subscriptions.push({ dispose: () => { if (watcher) watcher.close(); } });
-    } catch {
-        // If watch fails, fall back to polling
-        const pollInterval = setInterval(() => {
-            try {
-                const stat = fs.statSync(TRIGGER_FILE);
-                const age = Date.now() - stat.mtimeMs;
-                if (age < 2000) handleTrigger();
-            } catch { /* ignore */ }
-        }, 2000);
-        context.subscriptions.push({ dispose: () => clearInterval(pollInterval) });
-    }
-}
-
-function handleTrigger() {
-    let trigger;
-    try {
-        const raw = fs.readFileSync(TRIGGER_FILE, 'utf8').trim();
-        if (!raw || raw === '{}') return;
-        trigger = JSON.parse(raw);
-    } catch {
-        return;
-    }
-
-    // Only act on recent triggers (within 10 seconds)
-    if (!trigger.timestamp || (Date.now() - trigger.timestamp) > 10000) return;
-
-    // Clear trigger so we don't re-fire
-    try { fs.writeFileSync(TRIGGER_FILE, '{}'); } catch { /* ignore */ }
-
-    // Cooldown: don't nag more than once per COOLDOWN_MS
-    const now = Date.now();
-    if (now - lastTriggerTime < COOLDOWN_MS) return;
-    lastTriggerTime = now;
-
-    const pct = trigger.used_percentage || '?';
-    const tokensK = trigger.tokens_used_k || '?';
-    const windowK = trigger.window_k || '?';
-
-    const message = `⚠️ Claude Code context at ${pct}% (${tokensK}K/${windowK}K tokens). Cache expires in ~5 min. Compact now?`;
-
-    vscode.window.showWarningMessage(
-        message,
-        { modal: false },
-        'Run /compact',
-        'Dismiss'
-    ).then((choice) => {
-        if (choice === 'Run /compact') {
-            sendCompactToTerminal();
-        }
-    });
 }
 
 function sendCompactToTerminal() {
@@ -249,6 +168,39 @@ function removeHeartbeat() {
     try { fs.unlinkSync(HEARTBEAT_FILE); } catch { /* ignore */ }
 }
 
+function checkCacheExpiry(metrics) {
+    if (!metrics.last_interaction_time) return;
+
+    const level = metrics.level || 'ok';
+    if (level !== 'danger') return;
+
+    const elapsed = Math.floor((Date.now() - metrics.last_interaction_time) / 1000);
+    const remaining = CACHE_TTL_SECONDS - elapsed;
+
+    // Only trigger when cache is about to expire (within warn window) but not yet expired
+    if (remaining > CACHE_WARN_SECONDS || remaining <= 0) return;
+
+    // Cooldown: don't nag more than once per COOLDOWN_MS
+    const now = Date.now();
+    if (now - lastTriggerTime < COOLDOWN_MS) return;
+    lastTriggerTime = now;
+
+    const pct = metrics.used_percentage || '?';
+    const tokensK = Math.round((metrics.total_input_tokens || 0) / 1000);
+    const windowK = Math.round((metrics.context_window_size || 0) / 1000);
+
+    vscode.window.showWarningMessage(
+        `⚠️ Cache expires in ~${remaining}s — context at ${pct}% (${tokensK}K/${windowK}K). Compact now to save costs?`,
+        { modal: false },
+        'Run /compact',
+        'Dismiss'
+    ).then((choice) => {
+        if (choice === 'Run /compact') {
+            sendCompactToTerminal();
+        }
+    });
+}
+
 function updateStatusBar() {
     writeHeartbeat();
 
@@ -280,7 +232,9 @@ function updateStatusBar() {
     const sessionPart = metrics.session_usage_pct != null ? ` | $(graph-line) ${metrics.session_usage_pct}%` : '';
     statusBarItem.text = `$(dashboard) ${icon} ${pct}%${cachePart}${sessionPart}`;
 
-    const tooltipParts = [`Context: ${pct}%`];
+    const usedK = Math.round((pct / 100) * (metrics.context_window_size || 0) / 1000);
+    const windowK = Math.round((metrics.context_window_size || 0) / 1000);
+    const tooltipParts = [`Context: ${pct}% (${usedK}K/${windowK}K)`];
     if (cachePart) tooltipParts.push(cachePart.includes('expired') ? 'Cache: expired' : `Cache: ${cachePart.slice(4)} remaining`);
     if (metrics.session_usage_pct != null) {
         const resetsIn = formatResetsIn(metrics.session_resets_at);
@@ -290,10 +244,12 @@ function updateStatusBar() {
     statusBarItem.tooltip = tooltipParts.join(' | ');
 
     statusBarItem.show();
+
+    // Check if cache is about to expire and context is high — prompt compact
+    checkCacheExpiry(metrics);
 }
 
 function deactivate() {
-    if (watcher) watcher.close();
     removeHeartbeat();
 }
 

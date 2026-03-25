@@ -1,12 +1,10 @@
-"""Tests for the Stop hook (compact-check.py) decision logic."""
+"""Tests for the Stop hook (compact-check.py) — writes metrics for the extension."""
 
 import json
 import os
 import subprocess
 import sys
 import time
-
-import pytest
 
 HOOK = os.path.join(os.path.dirname(__file__), '..', 'hooks', 'compact-check.py')
 
@@ -23,11 +21,6 @@ def write_metrics(tmp_path, session_id, tokens=50_000, window_size=167_000):
         'session_id': session_id,
     }
     (metrics_dir / f'metrics-{session_id}.json').write_text(json.dumps(metrics))
-
-
-def clear_cooldown(tmp_path, session_id):
-    cooldown = tmp_path / 'claude-code-compact-guard' / f'cooldown-{session_id}'
-    cooldown.unlink(missing_ok=True)
 
 
 def _setup_fake_security(tmp_path):
@@ -48,14 +41,13 @@ def run_hook(tmp_path, stdin_data, env_extra=None):
     env.pop('TERM_PROGRAM', None)
     if env_extra:
         env.update(env_extra)
-    result = subprocess.run(
+    return subprocess.run(
         [sys.executable, HOOK],
         input=json.dumps(stdin_data),
         capture_output=True,
         text=True,
         env=env,
     )
-    return result
 
 
 def parse_output(result):
@@ -64,142 +56,136 @@ def parse_output(result):
     return json.loads(result.stdout)
 
 
-# --- Decision logic ---
+def read_written_metrics(tmp_path, session_id):
+    path = tmp_path / 'claude-code-compact-guard' / f'metrics-{session_id}.json'
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
 
 
-class TestDecisions:
-    def test_below_threshold_allows(self, tmp_path):
+class TestMetricsWriting:
+    def test_writes_metrics_from_cached(self, tmp_path):
         write_metrics(tmp_path, 'sess-1', tokens=50_000)
         result = run_hook(tmp_path, {'session_id': 'sess-1'})
         assert result.returncode == 0
         assert parse_output(result) is None
+        metrics = read_written_metrics(tmp_path, 'sess-1')
+        assert metrics is not None
+        assert metrics['total_input_tokens'] == 50_000
 
-    def test_above_threshold_blocks(self, tmp_path):
+    def test_no_output_ever(self, tmp_path):
+        """Stop hook never blocks Claude — only writes metrics."""
         write_metrics(tmp_path, 'sess-1', tokens=90_000)
         result = run_hook(tmp_path, {'session_id': 'sess-1'})
-        output = parse_output(result)
-        assert output['decision'] == 'block'
-        assert '90K' in output['reason']
+        assert result.returncode == 0
+        assert parse_output(result) is None
 
-    def test_exactly_at_threshold_blocks(self, tmp_path):
-        write_metrics(tmp_path, 'sess-1', tokens=80_000)
-        result = run_hook(tmp_path, {'session_id': 'sess-1'})
-        output = parse_output(result)
-        assert output['decision'] == 'block'
-
-    def test_stop_hook_active_always_allows(self, tmp_path):
+    def test_stop_hook_active_exits_early(self, tmp_path):
         write_metrics(tmp_path, 'sess-1', tokens=90_000)
         result = run_hook(tmp_path, {'session_id': 'sess-1', 'stop_hook_active': True})
         assert parse_output(result) is None
 
-    def test_no_metrics_allows(self, tmp_path):
+    def test_no_metrics_exits_cleanly(self, tmp_path):
         result = run_hook(tmp_path, {'session_id': 'no-such-session'})
+        assert result.returncode == 0
         assert parse_output(result) is None
 
+    def test_adds_cwd_to_metrics(self, tmp_path):
+        write_metrics(tmp_path, 'sess-1', tokens=50_000)
+        run_hook(tmp_path, {'session_id': 'sess-1', 'cwd': '/some/path'})
+        metrics = read_written_metrics(tmp_path, 'sess-1')
+        assert metrics['cwd'] == '/some/path'
 
-# --- Cooldown ---
+    def test_transcript_only_no_cached_metrics(self, tmp_path):
+        """Without context-monitor.js, transcript alone produces full metrics with inferred window."""
+        transcript = tmp_path / 'transcript.jsonl'
+        entry = {
+            'type': 'assistant',
+            'message': {
+                'model': 'claude-sonnet-4-6',
+                'usage': {
+                    'input_tokens': 60_000,
+                    'output_tokens': 5_000,
+                    'cache_creation_input_tokens': 0,
+                    'cache_read_input_tokens': 0,
+                },
+            },
+        }
+        transcript.write_text(json.dumps(entry))
 
+        run_hook(tmp_path, {'session_id': 'sess-1', 'transcript_path': str(transcript)})
 
-class TestCooldown:
-    def test_cooldown_prevents_second_block(self, tmp_path):
-        write_metrics(tmp_path, 'sess-1', tokens=90_000)
+        metrics = read_written_metrics(tmp_path, 'sess-1')
+        assert metrics is not None
+        assert metrics['total_input_tokens'] == 60_000
+        assert metrics['context_window_size'] == 200_000  # inferred from model (no [1m])
+        assert metrics['used_percentage'] == 30  # 60K / 200K
+        assert metrics['level'] == 'warn'  # 60K >= WARN_TOKENS
+        assert metrics['model_id'] == 'claude-sonnet-4-6'
+        assert metrics['last_interaction_time'] is not None
 
-        r1 = run_hook(tmp_path, {'session_id': 'sess-1'})
-        assert parse_output(r1)['decision'] == 'block'
+    def test_transcript_1m_model_infers_large_window(self, tmp_path):
+        """Model with [1m] suffix gets 1M context window."""
+        transcript = tmp_path / 'transcript.jsonl'
+        entry = {
+            'type': 'assistant',
+            'message': {
+                'model': 'claude-opus-4-6[1m]',
+                'usage': {
+                    'input_tokens': 100_000,
+                    'output_tokens': 5_000,
+                    'cache_creation_input_tokens': 0,
+                    'cache_read_input_tokens': 0,
+                },
+            },
+        }
+        transcript.write_text(json.dumps(entry))
 
-        r2 = run_hook(tmp_path, {'session_id': 'sess-1'})
-        assert parse_output(r2) is None
+        run_hook(tmp_path, {'session_id': 'sess-1', 'transcript_path': str(transcript)})
 
-    def test_cooldown_is_per_session(self, tmp_path):
-        write_metrics(tmp_path, 'sess-1', tokens=90_000)
-        write_metrics(tmp_path, 'sess-2', tokens=90_000)
+        metrics = read_written_metrics(tmp_path, 'sess-1')
+        assert metrics['context_window_size'] == 1_000_000
+        assert metrics['used_percentage'] == 10  # 100K / 1M
 
-        r1 = run_hook(tmp_path, {'session_id': 'sess-1'})
-        assert parse_output(r1)['decision'] == 'block'
+    def test_preserves_cached_fields_with_transcript(self, tmp_path):
+        """When cached metrics exist (from context-monitor.js), they override inferred values."""
+        metrics_dir = tmp_path / 'claude-code-compact-guard'
+        metrics_dir.mkdir(exist_ok=True)
+        cached = {
+            'timestamp': int(time.time() * 1000),
+            'context_window_size': 167_000,
+            'total_input_tokens': 50_000,
+            'session_id': 'sess-1',
+            'level': 'warn',
+            'last_interaction_time': 1234567890,
+            'model_id': 'claude-sonnet-4-6',
+        }
+        (metrics_dir / 'metrics-sess-1.json').write_text(json.dumps(cached))
 
-        r2 = run_hook(tmp_path, {'session_id': 'sess-2'})
-        assert parse_output(r2)['decision'] == 'block'
+        transcript = tmp_path / 'transcript.jsonl'
+        entry = {
+            'type': 'assistant',
+            'message': {
+                'model': 'claude-sonnet-4-6',
+                'usage': {
+                    'input_tokens': 60_000,
+                    'output_tokens': 5_000,
+                    'cache_creation_input_tokens': 0,
+                    'cache_read_input_tokens': 0,
+                },
+            },
+        }
+        transcript.write_text(json.dumps(entry))
 
-    def test_expired_cooldown_allows_block(self, tmp_path):
-        write_metrics(tmp_path, 'sess-1', tokens=90_000)
-        run_hook(tmp_path, {'session_id': 'sess-1'})
+        run_hook(tmp_path, {'session_id': 'sess-1', 'transcript_path': str(transcript)})
 
-        cooldown = tmp_path / 'claude-code-compact-guard' / 'cooldown-sess-1'
-        old_time = time.time() - 250
-        os.utime(cooldown, (old_time, old_time))
-
-        r2 = run_hook(tmp_path, {'session_id': 'sess-1'})
-        assert parse_output(r2)['decision'] == 'block'
-
-
-# --- Editor detection ---
-
-
-class TestEditorDetection:
-    @pytest.mark.parametrize('term_program', ['vscode', 'cursor', 'iTerm2'])
-    def test_active_heartbeat_delegates_regardless_of_terminal(self, tmp_path, term_program):
-        """Extension heartbeat alone is enough to delegate — TERM_PROGRAM doesn't matter."""
-        write_metrics(tmp_path, 'sess-1', tokens=90_000)
-        (tmp_path / 'claude-code-compact-guard-active').write_text(str(time.time()))
-
-        result = run_hook(
-            tmp_path,
-            {'session_id': 'sess-1'},
-            env_extra={'TERM_PROGRAM': term_program},
-        )
-        assert parse_output(result) is None
-
-    def test_no_heartbeat_in_editor_blocks(self, tmp_path):
-        write_metrics(tmp_path, 'sess-1', tokens=90_000)
-
-        result = run_hook(
-            tmp_path,
-            {'session_id': 'sess-1'},
-            env_extra={'TERM_PROGRAM': 'vscode'},
-        )
-        assert parse_output(result)['decision'] == 'block'
-
-    def test_stale_heartbeat_blocks(self, tmp_path):
-        write_metrics(tmp_path, 'sess-1', tokens=90_000)
-        heartbeat = tmp_path / 'claude-code-compact-guard-active'
-        heartbeat.write_text('old')
-        old_time = time.time() - 60
-        os.utime(heartbeat, (old_time, old_time))
-
-        result = run_hook(
-            tmp_path,
-            {'session_id': 'sess-1'},
-            env_extra={'TERM_PROGRAM': 'vscode'},
-        )
-        assert parse_output(result)['decision'] == 'block'
-
-
-# --- Trigger file ---
-
-
-class TestTrigger:
-    def test_writes_trigger_on_block(self, tmp_path):
-        write_metrics(tmp_path, 'sess-1', tokens=90_000)
-        run_hook(tmp_path, {'session_id': 'sess-1'})
-
-        trigger = json.loads((tmp_path / 'claude-code-compact-guard-trigger.json').read_text())
-        assert trigger['tokens_used_k'] == 90
-
-    def test_writes_trigger_even_when_extension_handles(self, tmp_path):
-        write_metrics(tmp_path, 'sess-1', tokens=90_000)
-        (tmp_path / 'claude-code-compact-guard-active').write_text(str(time.time()))
-
-        run_hook(
-            tmp_path,
-            {'session_id': 'sess-1'},
-            env_extra={'TERM_PROGRAM': 'vscode'},
-        )
-
-        trigger = json.loads((tmp_path / 'claude-code-compact-guard-trigger.json').read_text())
-        assert trigger['tokens_used_k'] == 90
-
-
-# --- Session isolation ---
+        metrics = read_written_metrics(tmp_path, 'sess-1')
+        assert metrics['total_input_tokens'] == 60_000
+        # Cached context_window_size (167K) overrides inferred (200K)
+        assert metrics['context_window_size'] == 167_000
+        assert metrics['used_percentage'] == 36  # 60K / 167K
+        assert metrics['last_interaction_time'] == 1234567890
 
 
 class TestSessionIsolation:
@@ -207,14 +193,15 @@ class TestSessionIsolation:
         write_metrics(tmp_path, 'sess-low', tokens=50_000)
         write_metrics(tmp_path, 'sess-high', tokens=90_000)
 
-        r_low = run_hook(tmp_path, {'session_id': 'sess-low'})
-        assert parse_output(r_low) is None
+        run_hook(tmp_path, {'session_id': 'sess-low'})
+        run_hook(tmp_path, {'session_id': 'sess-high'})
 
-        r_high = run_hook(tmp_path, {'session_id': 'sess-high'})
-        assert parse_output(r_high)['decision'] == 'block'
+        low = read_written_metrics(tmp_path, 'sess-low')
+        high = read_written_metrics(tmp_path, 'sess-high')
+        assert low['total_input_tokens'] == 50_000
+        assert high['total_input_tokens'] == 90_000
 
-    def test_missing_session_metrics_allows(self, tmp_path):
+    def test_missing_session_metrics_no_write(self, tmp_path):
         write_metrics(tmp_path, 'other-session', tokens=90_000)
-
-        result = run_hook(tmp_path, {'session_id': 'my-session'})
-        assert parse_output(result) is None
+        run_hook(tmp_path, {'session_id': 'my-session'})
+        assert read_written_metrics(tmp_path, 'my-session') is None

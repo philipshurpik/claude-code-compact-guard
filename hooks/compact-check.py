@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check context usage after each response and prompt compaction if threshold exceeded."""
+"""Stop hook: writes metrics for the extension to read."""
 
 import json
 import os
@@ -7,20 +7,18 @@ import sys
 import tempfile
 import time
 
-# --- Configuration ---
-# Compact suggestion threshold in tokens (absolute, model-agnostic).
-# When total input tokens exceed this, the hook blocks Claude and asks user to /compact.
-COMPACT_THRESHOLD_TOKENS = 80_000
-
-# Cooldown: don't nag more than once per N seconds
-COOLDOWN_SECONDS = 200
+WARN_TOKENS = 60_000
+COMPACT_TOKENS = 80_000
+AUTOCOMPACT_BUFFER_TOKENS = 33_000
 
 _TMPDIR = os.environ.get('COMPACT_GUARD_TMPDIR', tempfile.gettempdir())
 METRICS_DIR = os.path.join(_TMPDIR, 'claude-code-compact-guard')
-TRIGGER_FILE = os.path.join(_TMPDIR, 'claude-code-compact-guard-trigger.json')
-HEARTBEAT_FILE = os.path.join(_TMPDIR, 'claude-code-compact-guard-active')
 
-HEARTBEAT_MAX_AGE_SECONDS = 30
+
+def infer_context_window(model_id: str) -> int:
+    """Infer effective context window (minus autocompact buffer). [1m] suffix means 1M tokens, otherwise 200K."""
+    raw = 1_000_000 if '[1m]' in model_id else 200_000
+    return raw - AUTOCOMPACT_BUFFER_TOKENS
 
 
 def sanitize_session_id(session_id: str) -> str:
@@ -38,12 +36,7 @@ def read_metrics(session_id: str) -> dict | None:
 
 
 def estimate_metrics_from_transcript(transcript_path: str, session_id: str, cwd: str = '') -> dict | None:
-    """Extract token counts from transcript (VS Code mode — StatusLine hook doesn't fire there).
-
-    Returns only raw token data; context_window_size and used_percentage are filled in main()
-    from the cached metrics file written by context-monitor.js (which has the real window size
-    from the live API — no model→size mapping needed here).
-    """
+    """Extract token counts from transcript (VS Code mode — StatusLine hook doesn't fire there)."""
     try:
         with open(transcript_path) as f:
             content = f.read().strip()
@@ -57,6 +50,7 @@ def estimate_metrics_from_transcript(transcript_path: str, session_id: str, cwd:
         )
 
         last_usage = None
+        model_id = ''
         total_output = 0
 
         for entry in entries:
@@ -65,6 +59,8 @@ def estimate_metrics_from_transcript(transcript_path: str, session_id: str, cwd:
                 if 'usage' in msg:
                     last_usage = msg['usage']
                     total_output += last_usage.get('output_tokens', 0)
+                if msg.get('model'):
+                    model_id = msg['model']
 
         if not last_usage:
             return None
@@ -74,12 +70,22 @@ def estimate_metrics_from_transcript(transcript_path: str, session_id: str, cwd:
         cache_read = last_usage.get('cache_read_input_tokens', 0)
         total_input = input_tokens + cache_creation + cache_read
 
+        window_size = infer_context_window(model_id) if model_id else 200_000 - AUTOCOMPACT_BUFFER_TOKENS
+        used_pct = min(100, round(total_input / window_size * 100))
+        level = 'danger' if total_input >= COMPACT_TOKENS else 'warn' if total_input >= WARN_TOKENS else 'ok'
+
         return {
             'timestamp': int(time.time() * 1000),
+            'last_interaction_time': int(time.time() * 1000),
             'total_input_tokens': total_input,
             'total_output_tokens': total_output,
             'cache_read_input_tokens': cache_read,
             'cache_creation_input_tokens': cache_creation,
+            'context_window_size': window_size,
+            'used_percentage': used_pct,
+            'remaining_percentage': 100 - used_pct,
+            'level': level,
+            'model_id': model_id,
             'session_id': session_id,
             'cwd': cwd,
         }
@@ -98,55 +104,10 @@ def write_metrics(metrics: dict):
         pass
 
 
-def cooldown_file(session_id: str) -> str:
-    return os.path.join(METRICS_DIR, f'cooldown-{sanitize_session_id(session_id)}')
-
-
-def is_in_cooldown(session_id: str) -> bool:
-    try:
-        mtime = os.path.getmtime(cooldown_file(session_id))
-        return (time.time() - mtime) < COOLDOWN_SECONDS
-    except FileNotFoundError:
-        return False
-
-
-def set_cooldown(session_id: str):
-    os.makedirs(METRICS_DIR, exist_ok=True)
-    with open(cooldown_file(session_id), 'w') as f:
-        f.write('')
-
-
-def is_extension_active() -> bool:
-    """Check if the VS Code / Cursor extension is running via heartbeat file."""
-    try:
-        mtime = os.path.getmtime(HEARTBEAT_FILE)
-        return (time.time() - mtime) < HEARTBEAT_MAX_AGE_SECONDS
-    except FileNotFoundError:
-        return False
-
-
-def write_vscode_trigger(used_pct: int, tokens_used_k: int, window_k: int):
-    """Write trigger file for VS Code / Cursor extension dialog."""
-    trigger = {
-        'timestamp': int(time.time() * 1000),
-        'used_percentage': used_pct,
-        'tokens_used_k': tokens_used_k,
-        'window_k': window_k,
-    }
-    try:
-        with open(TRIGGER_FILE, 'w') as f:
-            json.dump(trigger, f)
-    except OSError:
-        pass
-
-
 def main():
     try:
         input_data = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
-        sys.exit(0)
-
-    if input_data.get('stop_hook_active', False):
         sys.exit(0)
 
     session_id = input_data.get('session_id', 'unknown')
@@ -159,63 +120,22 @@ def main():
     cached_metrics = read_metrics(session_id)
 
     if transcript_metrics:
-        # Fill in fields from cached metrics (context-monitor.js wrote the real values).
+        # Merge rate-limit fields from cached metrics (context-monitor.js writes these).
+        # Don't override context_window_size — transcript path already computes it correctly
+        # via infer_context_window (with AUTOCOMPACT_BUFFER_TOKENS subtracted).
         cached = cached_metrics or {}
-        for key in ('context_window_size', 'level', 'last_interaction_time', 'model_id',
-                     'session_usage_pct', 'session_resets_at', 'weekly_usage_pct', 'weekly_resets_at'):
-            if key in cached and key not in transcript_metrics:
+        for key in ('session_usage_pct', 'session_resets_at', 'weekly_usage_pct', 'weekly_resets_at'):
+            if key in cached:
                 transcript_metrics[key] = cached[key]
-        window_size = transcript_metrics.get('context_window_size', 0)
-        if window_size:
-            total = transcript_metrics['total_input_tokens']
-            transcript_metrics['used_percentage'] = min(100, round(total / window_size * 100))
-            transcript_metrics['remaining_percentage'] = 100 - transcript_metrics['used_percentage']
         metrics = transcript_metrics
     elif cached_metrics:
         metrics = cached_metrics
     else:
         sys.exit(0)
 
-    # Always write metrics so the extension can display context % in its status bar,
-    # regardless of whether we're above the compact threshold.
     if cwd and not metrics.get('cwd'):
         metrics['cwd'] = cwd
     write_metrics(metrics)
-
-    tokens_used = metrics.get('total_input_tokens', 0)
-    if tokens_used < COMPACT_THRESHOLD_TOKENS:
-        sys.exit(0)
-
-    if is_in_cooldown(session_id):
-        sys.exit(0)
-
-    set_cooldown(session_id)
-
-    # Calculate useful stats for the message
-    used_pct = metrics.get('used_percentage', 0)
-    window_size = metrics.get('context_window_size', 0)
-    tokens_used_k = round(tokens_used / 1000)
-    window_k = round(window_size / 1000)
-
-    write_vscode_trigger(used_pct, tokens_used_k, window_k)
-
-    if is_extension_active():
-        # Session is inside VS Code/Cursor and extension is active.
-        # Extension will show the dialog -- no need to block Claude.
-        sys.exit(0)
-
-    # No extension running - block Claude and ask it to warn the user (CLI fallback)
-    reason = (
-        f'⚠️ Context usage: {used_pct}% ({tokens_used_k}K/{window_k}K tokens). '
-        f'Cache will expire in ~5 minutes. '
-        f'Please tell the user: "Context is at {used_pct}% - I recommend running /compact now '
-        f'to save on costs. The prompt cache expires in ~5 min." '
-        f'Then wait for the user to decide.'
-    )
-
-    output = {'decision': 'block', 'reason': reason}
-    print(json.dumps(output))
-    sys.exit(0)
 
 
 if __name__ == '__main__':
