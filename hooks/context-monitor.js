@@ -15,7 +15,7 @@ const AUTOCOMPACT_BUFFER_TOKENS = 33_000;
 
 // Thresholds for status line color coding (absolute tokens, model-agnostic)
 const WARN_TOKENS = 60_000;
-const DANGER_TOKENS = 100_000;
+const COMPACT_TOKENS = 80_000;
 
 function formatReset(epoch) {
   if (!epoch) return '';
@@ -59,7 +59,7 @@ process.stdin.on('end', () => {
     const weeklyResetsAt = rlSevenDay?.resets_at ?? null;
 
     // Determine usage level based on absolute token thresholds (using tokensUsed which matches the displayed value)
-    const level = tokensUsed >= DANGER_TOKENS ? 'danger' : tokensUsed >= WARN_TOKENS ? 'warn' : 'ok';
+    const level = tokensUsed >= COMPACT_TOKENS ? 'danger' : tokensUsed >= WARN_TOKENS ? 'warn' : 'ok';
 
     // Write metrics for the Stop hook to read
     const metrics = {
