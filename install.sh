@@ -51,19 +51,19 @@ settings['statusLine'] = {
 }
 print('  + Set statusLine -> context-monitor.js')
 
-# Add Stop hook (preserve existing hooks)
+# Add PostToolUse hook (preserve existing hooks)
 hooks = settings.setdefault('hooks', {})
-stop_hooks = hooks.setdefault('Stop', [])
+post_tool_hooks = hooks.setdefault('PostToolUse', [])
 
 # Check if our hook is already installed
 compact_check_cmd = f'python3 {hooks_dir}/compact-check.py'
 already_installed = any(
     compact_check_cmd in str(group)
-    for group in stop_hooks
+    for group in post_tool_hooks
 )
 
 if not already_installed:
-    stop_hooks.append({
+    post_tool_hooks.append({
         'hooks': [
             {
                 'type': 'command',
@@ -71,9 +71,9 @@ if not already_installed:
             }
         ]
     })
-    print('  + Added Stop hook -> compact-check.py')
+    print('  + Added PostToolUse hook -> compact-check.py')
 else:
-    print('  ~ Stop hook already installed, skipping')
+    print('  ~ PostToolUse hook already installed, skipping')
 
 with open(settings_path, 'w') as f:
     json.dump(settings, f, indent=2)
@@ -161,7 +161,7 @@ echo "=== Done! ==="
 echo ""
 echo "Installed:"
 echo "  - StatusLine: context % with color coding (terminal)"
-echo "  - Stop hook: warns at 40% context (edit compact-check.py to change)"
+echo "  - PostToolUse hook: warns at 40% context (edit compact-check.py to change)"
 if [ -n "$INSTALLED_EDITORS" ]; then
     echo "  - Extension: dialog + auto /compact (${INSTALLED_EDITORS%, })"
 fi

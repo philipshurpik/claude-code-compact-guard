@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 
 // StatusLine hook: monitors context usage and writes metrics to a temp file.
-// This is the ONLY hook type that receives live context_window data.
-// Usage quota is fetched by compact-check.py (Stop hook) — we only read the cache here.
 
 const fs = require('fs');
 const path = require('path');
@@ -11,20 +9,25 @@ const { execSync } = require('child_process');
 
 const BASE_DIR = process.env.COMPACT_GUARD_TMPDIR || os.tmpdir();
 const METRICS_DIR = path.join(BASE_DIR, 'claude-code-compact-guard');
-const USAGE_CACHE_FILE = path.join(METRICS_DIR, 'usage-cache.json');
 
 // Autocompact buffer (Claude Code reserves ~33K tokens for autocompact)
 const AUTOCOMPACT_BUFFER_TOKENS = 33_000;
 
 // Thresholds for status line color coding (absolute tokens, model-agnostic)
 const WARN_TOKENS = 60_000;
-const DANGER_TOKENS = 80_000;
+const COMPACT_TOKENS = 80_000;
 
-function readUsageCache() {
-  try {
-    return JSON.parse(fs.readFileSync(USAGE_CACHE_FILE, 'utf8'));;
-  } catch {}
-  return null;
+function formatReset(epoch) {
+  if (!epoch) return '';
+  const diff = Math.max(0, Math.round(epoch - Date.now() / 1000));
+  if (diff <= 0) return 'now';
+  if (diff < 60) return '<1m';
+  const d = Math.floor(diff / 86400);
+  const h = Math.floor((diff % 86400) / 3600);
+  const m = Math.floor((diff % 3600) / 60);
+  if (d > 0) return `${d}d${h}h`;
+  if (h > 0) return `${h}h${m}m`;
+  return `${m}m`;
 }
 
 let input = '';
@@ -46,17 +49,22 @@ process.stdin.on('end', () => {
     const tokensUsed = Math.round((rawUsedPct / 100) * windowSize);
     const usedPct = Math.min(100, Math.round((tokensUsed / effectiveWindow) * 100));
 
-    // Read usage quota from cache (written by compact-check.py Stop hook)
-    const usage = readUsageCache();
-    const fiveHour = usage?.five_hour;
-    const sevenDay = usage?.seven_day;
-    const sessionUsagePct = fiveHour ? Math.round(fiveHour.utilization) : null;
-    const sessionResetsAt = fiveHour?.resets_at ?? null;
-    const weeklyUsagePct = sevenDay ? Math.round(sevenDay.utilization) : null;
+    // Rate limits from Claude Code 2.1.80+
+    const rateLimits = data.rate_limits || {};
+    const rlFiveHour = rateLimits.five_hour;
+    const rlSevenDay = rateLimits.seven_day;
+    const sessionUsagePct = rlFiveHour?.used_percentage != null ? Math.round(rlFiveHour.used_percentage) : null;
+    const sessionResetsAt = rlFiveHour?.resets_at ?? null;
+    const weeklyUsagePct = rlSevenDay?.used_percentage != null ? Math.round(rlSevenDay.used_percentage) : null;
+    const weeklyResetsAt = rlSevenDay?.resets_at ?? null;
+
+    // Determine usage level based on absolute token thresholds (using tokensUsed which matches the displayed value)
+    const level = tokensUsed >= COMPACT_TOKENS ? 'danger' : tokensUsed >= WARN_TOKENS ? 'warn' : 'ok';
 
     // Write metrics for the Stop hook to read
     const metrics = {
       timestamp: Date.now(),
+      level,
       used_percentage: usedPct,
       remaining_percentage: 100 - usedPct,
       context_window_size: effectiveWindow,
@@ -67,6 +75,7 @@ process.stdin.on('end', () => {
       session_usage_pct: sessionUsagePct,
       session_resets_at: sessionResetsAt,
       weekly_usage_pct: weeklyUsagePct,
+      weekly_resets_at: weeklyResetsAt,
       model_id: model.id ?? 'unknown',
       session_id: data.session_id ?? '',
       cwd: cwd,
@@ -91,18 +100,11 @@ process.stdin.on('end', () => {
 
     fs.writeFileSync(sessionMetricsFile, JSON.stringify(metrics, null, 2));
 
-    // Color-coded status line output (based on absolute token count, not %)
-    const inputTokens = ctx.total_input_tokens ?? tokensUsed;
-    let color;
-    if (inputTokens >= DANGER_TOKENS) {
-      color = '\x1b[38;5;208m'; // orange
-    } else if (inputTokens >= WARN_TOKENS) {
-      color = '\x1b[33m'; // yellow
-    } else {
-      color = '\x1b[32m'; // green
-    }
+    // Color-coded status line output
+    const color = level === 'danger' ? '\x1b[38;5;208m' : level === 'warn' ? '\x1b[33m' : '\x1b[32m';
     const reset = '\x1b[0m';
     const dimColor = '\x1b[38;5;238m';
+    const mutedColor = '\x1b[38;5;245m';
 
     const modelName = model.display_name ?? 'Claude';
 
@@ -119,19 +121,11 @@ process.stdin.on('end', () => {
     const windowK = (effectiveWindow / 1000).toFixed(0);
 
     // Build graphical progress bar (10 segments)
-    const barWidth = 10;
-    let bar = '';
-    for (let i = 0; i < barWidth; i++) {
-      const segStart = i * 10;
-      const progress = usedPct - segStart;
-      if (progress >= 8) {
-        bar += `${color}█${reset}`;
-      } else if (progress >= 3) {
-        bar += `${color}▄${reset}`;
-      } else {
-        bar += `${dimColor}░${reset}`;
-      }
-    }
+    const bar = Array.from({ length: 10 }, (_, i) => {
+      const progress = usedPct - i * 10;
+      const ch = progress >= 8 ? '█' : progress >= 3 ? '▄' : null;
+      return ch ? `${color}${ch}${reset}` : `${dimColor}░${reset}`;
+    }).join('');
 
     const lastActive = new Date(lastInteractionTime);
     const time = `${String(lastActive.getHours()).padStart(2, '0')}:${String(lastActive.getMinutes()).padStart(2, '0')}`;
@@ -142,7 +136,18 @@ process.stdin.on('end', () => {
     if (branch) output += ` │ ⎇ ${branch}`;
     output += ` │ ◷ ${time}`;
     output += ` │ ${bar} ${usedPct}% (${tokensK}K/${windowK}K)`;
-    if (sessionUsagePct != null) output += ` │ ⚡ ${sessionUsagePct}%`;
+    if (sessionUsagePct != null) {
+      const rlColor = sessionUsagePct > 80 ? '\x1b[31m' : sessionUsagePct > 50 ? '\x1b[33m' : '\x1b[32m';
+      const resetStr = formatReset(sessionResetsAt);
+      output += ` │ ${rlColor}${sessionUsagePct}%${reset}`;
+      if (resetStr) output += ` ${mutedColor}↻${resetStr}${reset}`;
+    }
+    if (weeklyUsagePct != null) {
+      const rlColor = weeklyUsagePct > 80 ? '\x1b[31m' : weeklyUsagePct > 50 ? '\x1b[33m' : '\x1b[32m';
+      const resetStr = formatReset(weeklyResetsAt);
+      output += ` │ ${rlColor}${weeklyUsagePct}%${reset}`;
+      if (resetStr) output += ` ${mutedColor}⟳${resetStr}${reset}`;
+    }
 
     process.stdout.write(output);
   } catch {

@@ -11,81 +11,61 @@ Save money by compacting context while the API cache is still warm.
 ## The Problem
 
 Claude Code's auto-compact only triggers when a **new message** is sent and context exceeds ~83%.
-If you wait 5+ minutes between messages, the prompt cache expires. That means your next message
-sends the entire conversation (e.g. 160K tokens) **without cache** - costing significantly more 
-(or eating 10 times faster your Pro/Max plan quota).
+If you wait 4+ minutes between messages, the prompt cache expires. That means your next message
+sends the entire conversation (e.g. 160K tokens) **without cache** — costing significantly more
+(or eating 10x faster your Pro/Max plan quota).
 
 ## The Solution
 
 Three components that work together:
 
-1. **StatusLine** (`hooks/context-monitor.js`) - monitors context usage in real time, writes metrics
-   to a temp file, and displays a color-coded context bar in the terminal
-2. **Stop hook** (`hooks/compact-check.py`) - fires immediately after Claude finishes responding.
-   If context exceeds your threshold, it blocks Claude from stopping and tells it to ask you
-   to run `/compact` - while the cache is still hot. Works in terminal / CLI.
-3. **VS Code / Cursor extension** (`vscode-extension/`) - shows a native warning dialog
-   with a "Run /compact" button that sends the command directly to the Claude Code terminal.
-   No manual typing needed.
+1. **StatusLine hook** (`hooks/context-monitor.js`) — the primary data source. Receives live
+   `context_window` and `rate_limits` data from Claude Code on every streaming update. Writes
+   per-session metrics to disk (context %, token counts, session/weekly usage, `last_interaction_time`)
+   and displays a color-coded context bar in the terminal. Fully self-contained — works without the other components.
+2. **PostToolUse hook** (`hooks/compact-check.py`) — fires after every tool call **in both CLI
+   and VS Code/Cursor modes**. Much more frequent than a Stop hook. Reads metrics written by
+   StatusLine hook, can also parse the transcript as fallback. Merges data and writes metrics
+   so the extension always has fresh info. Sets `last_interaction_time` on each run (the cache TTL
+   countdown anchor). Without StatusLine hook data, it operates in degraded mode with inferred values.
+3. **VS Code / Cursor extension** (`vscode-extension/`) — polls metrics every 10s for status bar
+   display, shows cache countdown timer, and prompts "Run /compact" dialog when cache is about to
+   expire and context is at danger level.
 
 ## How It Works
-
-**VS Code / Cursor** (extension installed):
-```
-Claude responds -> Stop hook fires -> detects extension is active
-                                   -> writes trigger file, does NOT block Claude
-                                   -> extension sees trigger
-                                   -> shows warning dialog with "Run /compact" button
-                                   -> you click the button
-                                   -> extension sends /compact to terminal automatically
-```
-
-**Terminal (CLI)** (no extension):
-```
-Claude responds -> Stop hook fires -> no extension heartbeat detected
-                                   -> blocks Claude, shows warning
-                                   -> Claude tells you: "run /compact now"
-                                   -> you type /compact (cache is still warm!)
-```
-
-The stop hook auto-detects whether the extension is running. With the extension,
-Claude isn't blocked -- you just get a clean dialog. Without it, you get the CLI fallback.
-
-## Architecture
-
-The three components never talk to each other directly — all communication is via temp files in `$TMPDIR/`:
 
 ```
 Claude Code CLI
     │
     ├─► StatusLine hook (context-monitor.js)   fires on every token stream update
-    │       reads:  usage-cache.json           (written by Stop hook, 300s TTL)
-    │       writes: metrics-{session_id}.json  (context % + session/weekly usage)
+    │       writes: metrics-{session_id}.json  (context %, tokens, rate limits, last_interaction_time)
     │       prints: colored status bar → stdout → Claude Code displays it
     │
-    └─► Stop hook (compact-check.py)           fires after every response
-            reads:  metrics-{session_id}.json
-            writes: usage-cache.json           (OAuth API fetch)
-                    cooldown-{session_id}      (rate-limit marker)
-                    trigger.json              (if extension heartbeat is fresh)
+    └─► PostToolUse hook (compact-check.py)     fires after every tool call
+            reads:  metrics-{session_id}.json  (for context_window_size, rate limits)
+            writes: metrics-{session_id}.json  (merged: transcript tokens + cached fields)
 
 VS Code Extension (extension.js)
-    ├─ writes: claude-code-compact-guard-active   heartbeat every 3s
-    ├─ reads:  metrics-{session_id}.json          polls every 3s → status bar
-    └─ watches: trigger.json
-                    → shows "Run /compact?" dialog
-                    → sends /compact to Claude terminal
+    ├─ writes: claude-code-compact-guard-active   heartbeat every 10s
+    └─ reads:  metrics-{session_id}.json          polls every 10s → status bar + cache countdown
 ```
 
-Session usage data (five-hour quota, weekly quota, resets_at) flows backwards through the cache:
-Stop hook fetches the OAuth API → writes `usage-cache.json` → StatusLine reads it and includes
-`session_usage_pct`, `session_resets_at`, `weekly_usage_pct` in the metrics file → extension
-displays these in the status bar tooltip and the "Show Context Status" notification.
+**Component dependencies:**
+- StatusLine hook is fully self-contained — works without the other components.
+- PostToolUse hook and extension depend on StatusLine hook for accurate data (real context window size,
+  rate limits, session/weekly usage). Without it, they operate in degraded mode with inferred values.
+- Extension reads metrics written by either hook — whichever ran most recently.
+
+**Cache TTL:** Anthropic's prompt cache TTL is ~3–5 minutes (historically 5 min, reports suggest
+~3 min since late 2025). The cache refreshes on every cache hit, so the timer resets with each
+request. We use **4 minutes** as the working estimate. The `last_interaction_time` in metrics is
+set by context-monitor.js (on token count changes) and by compact-check.py (on each PostToolUse run),
+giving the extension an accurate basis for the cache countdown.
 
 ## Quick Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/claude-code-compact-guard.git
+git clone https://github.com/anthropics/claude-code-compact-guard.git
 cd claude-code-compact-guard
 bash install.sh
 ```
@@ -121,7 +101,7 @@ Add or merge the following into your existing settings:
     "padding": 0
   },
   "hooks": {
-    "Stop": [
+    "PostToolUse": [
       {
         "hooks": [
           {
@@ -135,23 +115,23 @@ Add or merge the following into your existing settings:
 }
 ```
 
-If you already have a `statusLine` or hooks, merge them manually -
+If you already have a `statusLine` or hooks, merge them manually —
 don't replace the whole file.
 
 ### Step 3: Install the extension
 
 ```bash
 # VS Code
-code --install-extension compact-guard-0.1.0.vsix --force
+code --install-extension compact-guard-0.1.1.vsix --force
 
 # Cursor
-cursor --install-extension compact-guard-0.1.0.vsix --force
+cursor --install-extension compact-guard-0.1.1.vsix --force
 
 # VS Code Insiders
-code-insiders --install-extension compact-guard-0.1.0.vsix --force
+code-insiders --install-extension compact-guard-0.1.1.vsix --force
 
 # Windsurf
-windsurf --install-extension compact-guard-0.1.0.vsix --force
+windsurf --install-extension compact-guard-0.1.1.vsix --force
 ```
 
 ### Step 4: Restart everything
@@ -162,102 +142,97 @@ windsurf --install-extension compact-guard-0.1.0.vsix --force
 
 ## Configuration
 
-### Thresholds
+### Token thresholds
 
-Edit `~/.claude/hooks/compact-check.py`:
+Defined in `context-monitor.js` and `compact-check.py` (keep in sync):
 
 ```python
-# When to suggest compaction (absolute input tokens)
-COMPACT_THRESHOLD_TOKENS = 80_000
-
-# Don't nag more than once per N seconds
-COOLDOWN_SECONDS = 200
+AUTOCOMPACT_BUFFER_TOKENS = 33_000  # Claude Code reserves this; subtracted from raw window
+WARN_TOKENS = 60_000                # status turns yellow/warning
+COMPACT_TOKENS = 100_000            # status turns orange/danger, extension may prompt compact
 ```
 
-Edit `~/.claude/hooks/context-monitor.js`:
+### Cache timing
+
+Defined in `extension.js`:
 
 ```javascript
-// StatusLine color thresholds (absolute input tokens)
-const WARN_TOKENS = 60_000;    // yellow
-const DANGER_TOKENS = 80_000;  // orange
+const CACHE_TTL_SECONDS = 240;   // 4 min — prompt cache expiry estimate
+const CACHE_WARN_SECONDS = 90;   // show compact dialog when this much cache time remains
 ```
 
 ### Recommended thresholds
 
-| Style | Stop hook threshold | Notes |
-|-------|-------------------|-------|
-| Aggressive (cheapest) | 60K tokens | Frequent compaction, short context |
-| Balanced | 80K tokens | Good tradeoff for most workflows |
-| Conservative | 120K tokens | More context, higher risk of expensive uncached calls |
+| Style | COMPACT_TOKENS | Notes |
+|-------|---------------|-------|
+| Aggressive (cheapest) | 60K | Frequent compaction, short context |
+| Balanced | 100K | Good tradeoff for most workflows |
+| Conservative | 120K | More context, higher risk of expensive uncached calls |
 
 ## What happens in practice
 
 1. You chat with Claude, context grows
-2. Claude finishes a response at 42% context
-3. Stop hook fires, reads metrics, sees token count > 80K
-4. **With extension**: hook writes trigger file and exits cleanly (no block).
-   Extension shows warning dialog with "Run /compact" button.
-   **Without extension**: hook blocks Claude, which warns you in chat.
-5. You click "Run /compact" in the dialog (or type `/compact` in CLI)
-6. Compaction runs using cached tokens (cheap!)
-7. Context drops to ~5-10%
-8. You continue working
+2. Each tool call fires the PostToolUse hook, which writes fresh metrics
+3. Extension polls metrics every 10s, shows context % and cache countdown in status bar
+4. Cache countdown approaches expiry while context is at danger level (≥100K tokens)
+5. Extension shows warning dialog: "Cache expires in ~60s — Compact now to save costs?"
+6. You click "Run /compact" → extension sends `/compact` to Claude Code terminal
+7. Compaction runs using cached tokens (cheap!)
+8. Context drops to ~5–10%
+9. You continue working
 
 If you ignore the warning:
-- Cooldown prevents nagging for ~3 minutes
+- Cooldown prevents nagging for ~200 seconds
 - Claude's built-in auto-compact still fires at ~83% as usual
-- But by then context is large and possibly uncached - exactly what we're trying to avoid
+- But by then context is large and possibly uncached — exactly what we're trying to avoid
 
 ## Extension Features
 
-**Warning dialog** - native VS Code/Cursor warning notification with two buttons:
-- "Run /compact" - finds the Claude Code terminal and sends the command automatically
-- "Dismiss" - ignore this time (cooldown still applies)
+**Cache countdown timer** — shows time remaining until the prompt cache expires, based on
+`last_interaction_time` from hooks. Disappears when cache has expired (no stale "expired" shown).
 
-**Status bar** - shows context percentage in the bottom bar with icons:
-- `$(check) Ctx: 25% | S: 11%` when healthy
-- `$(info) Ctx: 45% | S: 30%` when approaching threshold
-- `$(warning) Ctx: 70% | S: 55%` when high
+**Warning dialog** — native VS Code/Cursor warning notification with two buttons:
+- "Run /compact" — finds the Claude Code terminal and sends the command automatically
+- "Dismiss" — ignore this time (cooldown still applies)
 
-Hover the status bar item to see full details: `Context: 25% | Session: 11% (resets in 3h 42m) | Weekly: 36%`
+**Status bar** — shows context percentage and cache countdown:
+- `$(check) 25% | 3:42` — healthy, cache warm
+- `$(warning) 45% | 1:15` — approaching threshold
+- `$(error) 70% | 0:30` — high context, cache expiring soon
 
-Updates every 3 seconds when a Claude Code session is active.
+Hover the status bar item to see full details: `Context: 25% (50K/167K) | Cache: 3:42 remaining | Session: 11% (resets in 3h 42m) | Weekly: 36%`
+
+Updates every 10 seconds when a Claude Code session is active.
 
 **Commands** (accessible via `Cmd+Shift+P` / `Ctrl+Shift+P`):
-- `Compact Guard: Run /compact in Claude Code` - manually trigger compaction
-- `Compact Guard: Show Context Status` - show current context usage
+- `Compact Guard: Run /compact in Claude Code` — manually trigger compaction
+- `Compact Guard: Show Context Status` — show current context usage
 
-**Terminal detection** - the extension looks for terminals with "claude" or "cc" in the name.
-If not found, it falls back to the active terminal. If no terminal is found at all, it copies
-`/compact` to clipboard for manual pasting.
+**Terminal detection** — the extension looks for terminals with "claude" in the name.
+If not found, it focuses the Claude Code VS Code extension and copies `/compact` to clipboard.
 
 ## Limitations
 
-- **macOS only for session usage tracking** - The Stop hook reads OAuth credentials
-  from the macOS Keychain (`security` CLI) to fetch session/weekly usage quota from the Anthropic API.
-  On non-macOS systems, context monitoring and compaction still work fully — only the
-  session % and weekly % indicators will be absent.
-- **Cannot auto-trigger /compact from CLI hooks** - Claude Code doesn't expose `/compact` as
-  a programmable action from hooks. The Stop hook can only ask Claude to tell you.
-  The VS Code/Cursor extension solves this via `terminal.sendText`.
-- **StatusLine is the only live context monitor** - the Stop hook itself doesn't
-  receive token counts, so we bridge via a temp file written by StatusLine.
-- **5-minute cache TTL is approximate** - Anthropic doesn't document the exact
-  TTL, it may vary.
+- **Cannot auto-trigger /compact from CLI hooks** — Claude Code doesn't expose `/compact` as
+  a programmable action from hooks. The VS Code/Cursor extension solves this via `terminal.sendText`.
+- **StatusLine is the primary data source** — the PostToolUse hook can parse transcripts as fallback,
+  but lacks real `context_window_size` and `rate_limits` without StatusLine hook data.
+- **Cache TTL is approximate** — Anthropic doesn't document the exact TTL; it may vary
+  (~3–5 minutes, we use 4 min as the working estimate).
 
 ## Files
 
 ```
 compact-guard/
 ├── hooks/
-│   ├── context-monitor.js       # StatusLine - writes metrics, shows context bar
-│   └── compact-check.py         # Stop hook - prompts compaction + triggers extension
+│   ├── context-monitor.js       # StatusLine — writes metrics, shows context bar
+│   └── compact-check.py         # PostToolUse hook — merges transcript data, writes metrics
 ├── vscode-extension/            # VS Code / Cursor extension source
 │   ├── extension.js
 │   └── package.json
 ├── install.sh                   # Installer (hooks + settings + extension)
 └── .github/workflows/
-    └── release.yml              # CI/CD - builds .vsix and creates GitHub release
+    └── release.yml              # CI/CD — builds .vsix and creates GitHub release
 ```
 
 Installed locations:
@@ -267,12 +242,14 @@ Installed locations:
 └── compact-check.py
 ```
 
-Temp files (auto-managed, in `/tmp/`):
-- `claude-code-compact-guard/metrics-{session_id}.json` - per-session context + usage metrics (written by StatusLine)
-- `claude-code-compact-guard/usage-cache.json` - OAuth API response cache, 300s TTL (written by Stop hook)
-- `claude-code-compact-guard/cooldown-{session_id}` - per-session cooldown marker
-- `claude-code-compact-guard-trigger.json` - extension trigger (written by Stop hook)
-- `claude-code-compact-guard-active` - extension heartbeat (tells Stop hook to skip blocking)
+Temp files (auto-managed, in `$TMPDIR/claude-code-compact-guard/`):
+
+| File | Writer | Reader | Purpose |
+|---|---|---|---|
+| `metrics-{session_id}.json` | context-monitor.js, compact-check.py | compact-check.py, extension | Context %, tokens, rate limits, last_interaction_time |
+| `claude-code-compact-guard-active` | extension.js | — | Heartbeat proving extension is alive |
+
+Override temp dir with `COMPACT_GUARD_TMPDIR` env var. Heartbeat file is directly in `$TMPDIR/`.
 
 ## Uninstall
 
@@ -282,12 +259,12 @@ rm ~/.claude/hooks/context-monitor.js
 rm ~/.claude/hooks/compact-check.py
 
 # Remove extension
-code --uninstall-extension compact-guard.compact-guard
-cursor --uninstall-extension compact-guard.compact-guard
-windsurf --uninstall-extension compact-guard.compact-guard
+code --uninstall-extension philipshurpik.claude-code-compact-guard
+cursor --uninstall-extension philipshurpik.claude-code-compact-guard
+windsurf --uninstall-extension philipshurpik.claude-code-compact-guard
 
 # Clean up temp files
-rm -rf /tmp/claude-code-compact-guard /tmp/claude-code-compact-guard-trigger.json /tmp/claude-code-compact-guard-active
+rm -rf /tmp/claude-code-compact-guard /tmp/claude-code-compact-guard-active
 ```
 
-Then remove the `statusLine` and `Stop` hook entries from `~/.claude/settings.json`.
+Then remove the `statusLine` and `PostToolUse` hook entries from `~/.claude/settings.json`.
